@@ -21,7 +21,15 @@ import {
   InvalidPDFException,
   warn,
 } from "../shared/util.js";
-import { CIRCULAR_REF, Cmd, Dict, isCmd, Ref, RefSet } from "./primitives.js";
+import {
+  CIRCULAR_REF,
+  Cmd,
+  Dict,
+  isCmd,
+  isName,
+  Ref,
+  RefSet,
+} from "./primitives.js";
 import { Lexer, Parser } from "./parser.js";
 import {
   MissingDataException,
@@ -30,6 +38,7 @@ import {
   XRefParseException,
 } from "./core_utils.js";
 import { BaseStream } from "./base_stream.js";
+import { Stream } from "./stream.js";
 
 class XRef {
   #cacheMap = new Map();
@@ -849,6 +858,44 @@ class XRef {
       }
     }
     return count;
+  }
+
+  /**
+   * Read the one cross-reference section (table or stream) that starts at
+   * `offset` in `bytes`, without following /Prev or /XRefStm and without
+   * touching the entries of this XRef.
+   * @returns {{dict: Dict, entries: Array<object>}} The trailer (or stream)
+   *   dictionary, and the section's entries indexed by object number
+   *   (`{offset, gen, free, uncompressed}`; sparse).
+   */
+  readXRefSection(bytes, offset) {
+    const section = new XRef(this.stream, this.pdfManager);
+    const parser = new Parser({
+      lexer: new Lexer(new Stream(bytes, offset)),
+      xref: this,
+      allowStreams: true,
+    });
+    let dict = null;
+    const obj = parser.getObj();
+    if (isCmd(obj, "xref")) {
+      dict = section.processXRefTable(parser);
+    } else if (
+      Number.isInteger(obj) &&
+      Number.isInteger(parser.getObj()) &&
+      isCmd(parser.getObj(), "obj")
+    ) {
+      const stream = parser.getObj();
+      if (
+        stream instanceof BaseStream &&
+        isName(stream.dict.get("Type"), "XRef")
+      ) {
+        dict = section.processXRefStream(stream);
+      }
+    }
+    if (!(dict instanceof Dict)) {
+      throw new FormatError("Not a cross-reference section.");
+    }
+    return { dict, entries: section.#entries };
   }
 
   getEntry(i) {

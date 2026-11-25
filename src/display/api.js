@@ -716,6 +716,15 @@ class PDFDataRangeTransport {
  *   document outline with this one (an empty array removes it). The default
  *   value is `null`, which keeps the outline as it is. Ignored for pure XFA
  *   documents.
+ * @property {boolean} [mergeIntoLastUpdate] - When the file already has an
+ *   incremental update section, write it again with this save's changes
+ *   merged in (newer objects win, the others are kept, other tools' changes
+ *   included) instead of appending one more section. The bytes before that
+ *   section stay byte-identical, so repeated saves don't grow the file and a
+ *   caller can write back only the bytes from that section on. A signed
+ *   section (/ByteRange), a linearized file or a structure that isn't
+ *   provably standard is never rewritten: the save appends as usual. The
+ *   default value is `false`.
  */
 
 /**
@@ -3009,6 +3018,7 @@ class WorkerTransport {
     flatten = false,
     intent = "print",
     outline = null,
+    mergeIntoLastUpdate = false,
   } = {}) {
     if (this.annotationStorage.size <= 0 && !flatten) {
       warn(
@@ -3036,6 +3046,7 @@ class WorkerTransport {
           flatten,
           intent: this.#getFlattenIntent(intent),
           outline,
+          mergeIntoLastUpdate,
         },
         transfer
       )

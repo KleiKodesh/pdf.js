@@ -872,6 +872,7 @@ class WorkerMessageHandler {
         flatten,
         intent,
         outline,
+        mergeIntoLastUpdate,
       }
     ) {
       if (isPureXfa) {
@@ -1005,8 +1006,9 @@ class WorkerMessageHandler {
 
       // Must happen before the `changes.size === 0` check below: an
       // outline-only save has no other changes.
+      let replacedOutlineNums = null;
       if (outline && catalogRef && !isPureXfa) {
-        await writeEditedOutline({
+        replacedOutlineNums = await writeEditedOutline({
           pdfManager: manager,
           xref,
           catalogRef,
@@ -1078,8 +1080,41 @@ class WorkerMessageHandler {
         };
       }
 
+      let originalData = stream.bytes;
+      if (mergeIntoLastUpdate && newXrefInfo.startXRef !== undefined) {
+        // Write the last update section again, with this save's changes,
+        // instead of appending one more section. A signed section is never
+        // rewritten: the save appends after it (and later saves merge into
+        // that new section). Anything unproven appends too.
+        const { findLastUpdateSection, getLastUpdateSectionChanges } =
+          await import(
+            /* webpackChunkName: "writer" */ "./last_update_section.js"
+          );
+        const section = findLastUpdateSection(stream.bytes, xref, startXRef);
+        if (section && !section.signed) {
+          try {
+            const sectionChanges = await getLastUpdateSectionChanges(
+              section,
+              changes,
+              xref,
+              newXrefInfo.encryptRef,
+              // The replaced outline's objects are dead after this save.
+              replacedOutlineNums
+            );
+            for (const [ref, value] of sectionChanges) {
+              changes.put(ref, value);
+            }
+            originalData = stream.bytes.subarray(0, section.start);
+            newXrefInfo.startXRef = section.prev;
+            newXrefInfo.xrefStm = section.xrefStm;
+          } catch (ex) {
+            warn(`saveDocument - cannot merge the last update: "${ex}".`);
+          }
+        }
+      }
+
       return incrementalUpdate({
-        originalData: stream.bytes,
+        originalData,
         xrefInfo: newXrefInfo,
         changes,
         xref,

@@ -473,6 +473,8 @@ function getTrailerDict(xrefInfo, changes, useXrefStream) {
   newXref.setIfDefined("Root", xrefInfo?.rootRef);
   newXref.setIfDefined("Info", xrefInfo?.infoRef);
   newXref.setIfDefined("Encrypt", xrefInfo?.encryptRef);
+  // A hybrid file's /XRefStm that stays in the bytes before this section.
+  newXref.setIfDefined("XRefStm", xrefInfo?.xrefStm);
 
   return newXref;
 }
