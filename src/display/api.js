@@ -712,6 +712,22 @@ class PDFDataRangeTransport {
  *   annotations. The default value is `"print"`. Ignored unless `flatten` is
  *   enabled. Document scripts are not executed. Callers handle WillPrint
  *   before saving and DidPrint afterward for scripted print changes.
+ * @property {Array<EditedOutlineItem> | null} [outline] - Replace the
+ *   document outline with this one (an empty array removes it). The default
+ *   value is `null`, which keeps the outline as it is. Ignored for pure XFA
+ *   documents.
+ */
+
+/**
+ * An outline entry edited by the user.
+ * @typedef {object} EditedOutlineItem
+ * @property {string} title
+ * @property {number} page - The 1-based page number a new entry points at.
+ * @property {number} [src] - The index of the entry's original item in the
+ *   document outline flattened breadth-first (top-level items, then all
+ *   their children level by level). The entry then keeps that item's
+ *   destination or action, style, colour and closed state.
+ * @property {Array<EditedOutlineItem>} [items] - The child entries.
  */
 
 /**
@@ -1085,6 +1101,9 @@ class PDFDocumentProxy {
    * @param {"display" | "print"} [options.intent] - Visibility to use when
    *   flattening; see {@link SaveDocumentParameters}. The default value is
    *   `"print"`.
+   * @param {Array<EditedOutlineItem> | null} [options.outline] - Replace the
+   *   outline of this document in the result; see
+   *   {@link SaveDocumentParameters}. The default value is `null`.
    * @returns {Promise<Uint8Array|null>} The extracted PDF bytes, or `null`
    *   if extraction fails.
    */
@@ -2985,7 +3004,12 @@ class WorkerTransport {
     return this.messageHandler.sendWithPromise("GetData", null);
   }
 
-  saveDocument({ printToPDF = null, flatten = false, intent = "print" } = {}) {
+  saveDocument({
+    printToPDF = null,
+    flatten = false,
+    intent = "print",
+    outline = null,
+  } = {}) {
     if (this.annotationStorage.size <= 0 && !flatten) {
       warn(
         "saveDocument called while `annotationStorage` is empty, " +
@@ -3011,6 +3035,7 @@ class WorkerTransport {
           filename: this.#fullReader?.filename ?? null,
           flatten,
           intent: this.#getFlattenIntent(intent),
+          outline,
         },
         transfer
       )
@@ -3023,12 +3048,13 @@ class WorkerTransport {
   extractPages(
     pageInfos,
     copyLevels = null,
-    { flatten = false, intent = "print" } = {}
+    { flatten = false, intent = "print", outline = null } = {}
   ) {
     const params = {
       pageInfos,
       flatten,
       intent: this.#getFlattenIntent(intent),
+      outline,
     };
     let transfer;
     const ImageBitmapCtor = globalThis.ImageBitmap;

@@ -36,6 +36,7 @@ import { clearGlobalCaches } from "./cleanup_helper.js";
 import { PDFWorkerStream } from "./worker_stream.js";
 import { stringToPDFString } from "./string_utils.js";
 import { StructTreeRoot } from "./struct_tree.js";
+import { writeEditedOutline } from "./edited_outline.js";
 
 class WorkerTask {
   #capability = createPromiseCapability();
@@ -577,7 +578,13 @@ class WorkerMessageHandler {
 
     handler.on(
       "ExtractPages",
-      async function ({ pageInfos, annotationStorage, flatten, intent }) {
+      async function ({
+        pageInfos,
+        annotationStorage,
+        flatten,
+        intent,
+        outline,
+      }) {
         if (!pageInfos) {
           warn("extractPages: nothing to extract.");
           return null;
@@ -655,6 +662,7 @@ class WorkerMessageHandler {
             /* webpackChunkName: "editor" */ "./editor/pdf_editor.js"
           );
           const pdfEditor = new PDFEditor();
+          pdfEditor.editedOutline = outline ?? null;
           task = new WorkerTask(`ExtractPages: ${pageInfos.length} page(s)`);
           startWorkerTask(task);
 
@@ -863,6 +871,7 @@ class WorkerMessageHandler {
         filename,
         flatten,
         intent,
+        outline,
       }
     ) {
       if (isPureXfa) {
@@ -993,6 +1002,19 @@ class WorkerMessageHandler {
             intent,
           })
         : acroForm;
+
+      // Must happen before the `changes.size === 0` check below: an
+      // outline-only save has no other changes.
+      if (outline && catalogRef && !isPureXfa) {
+        await writeEditedOutline({
+          pdfManager: manager,
+          xref,
+          catalogRef,
+          changes,
+          numPages,
+          outline,
+        });
+      }
 
       let xfaData = null;
       if (isPureXfa) {

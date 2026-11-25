@@ -43,6 +43,7 @@ import { stringToAsciiOrUTF16BE, stringToPDFString } from "../string_utils.js";
 import { AnnotationFactory } from "../annotation.js";
 import { BaseStream } from "../base_stream.js";
 import { createImage } from "./pdf_images.js";
+import { editedOutlineToItems } from "../edited_outline.js";
 import { LETTER_SIZE_MEDIABOX } from "../document.js";
 import { MurmurHash3_64 } from "../../shared/murmurhash3.js";
 import { StringStream } from "../stream.js";
@@ -147,6 +148,10 @@ class PDFEditor {
   #newAnnotationsParams = null;
 
   #primaryDocument = null;
+
+  // An outline edited by the user replacing the primary document's outline
+  // (see edited_outline.js), or null.
+  editedOutline = null;
 
   // Reference mappings for each copy of the primary document.
   #primaryRefMappings = [];
@@ -1195,6 +1200,15 @@ class PDFEditor {
         .ensureCatalog("rawEmbeddedFiles")
         .then(ef => (documentData.embeddedFiles = ef)),
     ]);
+    if (this.editedOutline && documentData.document === this.#primaryDocument) {
+      // The user's edited outline replaces the loaded one; the filtering in
+      // #buildOutline still drops entries pointing at pages not kept.
+      documentData.outline = await editedOutlineToItems(
+        documentData.document,
+        documentData.outline,
+        this.editedOutline
+      );
+    }
     const structTreeRoot = documentData.structTreeRoot;
     if (structTreeRoot) {
       const rootDict = structTreeRoot.dict;
