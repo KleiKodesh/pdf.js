@@ -4152,7 +4152,69 @@ class PartialEvaluator {
    * @returns {Promise} A Promise that is resolved with a
    *   {ToUnicodeMap|IdentityToUnicodeMap} object.
    */
+  /**
+   * Old Hebrew typesetting embeds 8-bit fonts whose glyph names are the Latin
+   * characters that share the Hebrew letter's byte: in Mac Roman, e.g.
+   * "Ocircumflex" (0xEF) draws final nun (0xEF in Windows-1255), and in
+   * WinAnsi "agrave" (0xE0) draws alef. Their text extracts as Latin junk
+   * ("ÔÈÈÚÓÓ"), and a ToUnicode they carry is often wrong too, so search and
+   * copy fail. Recognize such a font from its Differences: every named glyph
+   * is a Hebrew-letter byte or ASCII punctuation/digit, with at least five
+   * letters, mostly at codes other than their byte (subset re-encoding; a
+   * Latin font names accented letters at their own codes).
+   * @returns {CharCodeMap|null} Hebrew letters for the letter codes.
+   * @private
+   */
+  _legacyHebrewToUnicode(properties) {
+    if (properties.composite || !properties.differences?.size) {
+      return null;
+    }
+    for (const encoding of [MacRomanEncoding, WinAnsiEncoding]) {
+      const toUnicode = new CharCodeMap();
+      let letters = 0,
+        moved = 0,
+        isHebrew = true;
+      for (const [charCode, glyphName] of properties.differences) {
+        if (glyphName === ".notdef" || glyphName === "space") {
+          continue;
+        }
+        const byte = encoding.indexOf(
+          glyphName === "applelogo" ? "apple" : glyphName
+        );
+        if (byte >= 0xe0 && byte <= 0xfa) {
+          // Windows-1255 0xE0..0xFA are the letters U+05D0..U+05EA in order.
+          toUnicode.set(charCode, String.fromCharCode(0x04f0 + byte));
+          letters++;
+          if (byte !== charCode) {
+            moved++;
+          }
+        } else if (
+          byte < 0x21 ||
+          byte > 0x7e ||
+          /[A-Za-z]/.test(String.fromCharCode(byte))
+        ) {
+          isHebrew = false;
+          break;
+        }
+      }
+      if (isHebrew && letters >= 5 && moved * 2 > letters) {
+        return toUnicode;
+      }
+    }
+    return null;
+  }
+
   async buildToUnicode(properties) {
+    const legacyHebrew = this._legacyHebrewToUnicode(properties);
+    if (legacyHebrew) {
+      // The glyph names, not a ToUnicode entry, tell what these glyphs draw.
+      const toUnicode = this._simpleFontToUnicode(properties);
+      legacyHebrew.forEach((charCode, unicode) => {
+        toUnicode.set(charCode, unicode);
+      });
+      properties.hasIncludedToUnicodeMap = false;
+      return new ToUnicodeMap(toUnicode);
+    }
     properties.hasIncludedToUnicodeMap = !!properties.toUnicode?.size;
 
     // Section 9.10.2 Mapping Character Codes to Unicode Values
