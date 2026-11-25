@@ -2138,7 +2138,27 @@ class PDFViewer {
    */
   _cancelRendering() {
     for (const pageView of this._pages) {
-      pageView.cancelRendering();
+      // Cancelling only stops the render task; it doesn't touch the
+      // renderingState, so a page cancelled while RUNNING/PAUSED kept its
+      // spinner for good (until a zoom happened to reset() it).
+      const wasRendering =
+        pageView.renderingState === RenderingStates.RUNNING ||
+        pageView.renderingState === RenderingStates.PAUSED;
+      // A text layer that is already built (its div was appended) is kept:
+      // cancelling it dropped the selectable text of a page whose canvas
+      // stays FINISHED, and nothing rebuilt it. A pending one is cancelled,
+      // and its page goes back to INITIAL so the rendering queue redraws it
+      // (and requests the text layer again) once it's visible.
+      const textLayerBuilt = !!pageView.textLayer?.div?.parentNode;
+      const textLayerPending = !!pageView.textLayer && !textLayerBuilt;
+      pageView.cancelRendering({ keepTextLayer: textLayerBuilt });
+      if (
+        wasRendering ||
+        (textLayerPending &&
+          pageView.renderingState === RenderingStates.FINISHED)
+      ) {
+        pageView.renderingState = RenderingStates.INITIAL;
+      }
     }
     // The deleted pages, kept until the deletion can't be undone anymore.
     for (const pageView of this.#savedPageViews ?? []) {
