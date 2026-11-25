@@ -428,6 +428,15 @@ class PDFFindController {
 
   #savedPageData = null;
 
+  // Text extractions are tied to the page order they were started in; it
+  // changes on every pages edit, which makes the pending ones stale.
+  #textGeneration = 0;
+
+  // Per page index: true once its text was extracted (or failed for good).
+  #textExtracted = [];
+
+  #textQueue = null;
+
   /**
    * @param {PDFFindControllerOptions} options
    */
@@ -603,6 +612,8 @@ class PDFFindController {
     this._pageContents = []; // Stores the normalized text for each page.
     this._pageDiffs = [];
     this._hasDiacritics = [];
+    this.#textGeneration++;
+    this.#textExtracted = [];
     this._matchesCountTotal = 0;
     this._pagesToSearch = null;
     this._pendingFindMatches = new Set();
@@ -882,50 +893,83 @@ class PDFFindController {
     if (this._extractTextPromises.length > 0) {
       return;
     }
+    this.#textExtracted = [];
+    this.#textQueue = Promise.resolve();
+    for (let i = 0, ii = this._linkService.pagesCount; i < ii; i++) {
+      this.#queueExtractText(i);
+    }
+  }
 
-    let deferred = Promise.resolve();
+  /**
+   * Queue the text extraction of the page at index `i`, behind the others.
+   * The result is only stored when the page order didn't change in between:
+   * after a pages edit the page at that index may be another one, so a stale
+   * extraction writes nothing and the edit queues the page again
+   * (see #requeueMissingText).
+   */
+  #queueExtractText(i) {
     const textOptions = { disableNormalization: true };
     const pdfDoc = this._pdfDocument;
-    for (let i = 0, ii = this._linkService.pagesCount; i < ii; i++) {
-      const { promise, resolve } = createPromiseCapability();
-      this._extractTextPromises[i] = promise;
+    const generation = this.#textGeneration;
+    const { promise, resolve } = createPromiseCapability();
+    this._extractTextPromises[i] = promise;
 
-      deferred = deferred.then(async () => {
-        if (pdfDoc !== this._pdfDocument) {
+    const isStale = () =>
+      pdfDoc !== this._pdfDocument || generation !== this.#textGeneration;
+
+    this.#textQueue = this.#textQueue.then(async () => {
+      if (isStale()) {
+        resolve();
+        return;
+      }
+      try {
+        const pdfPage = await pdfDoc.getPage(i + 1);
+        const textContent = await pdfPage.getTextContent(textOptions);
+
+        if (isStale()) {
           resolve();
           return;
         }
-        try {
-          const pdfPage = await pdfDoc.getPage(i + 1);
-          const textContent = await pdfPage.getTextContent(textOptions);
+        const strBuf = [];
 
-          if (pdfDoc !== this._pdfDocument) {
-            resolve();
-            return;
+        for (const textItem of textContent.items) {
+          strBuf.push(textItem.str);
+          if (textItem.hasEOL) {
+            strBuf.push("\n");
           }
-          const strBuf = [];
-
-          for (const textItem of textContent.items) {
-            strBuf.push(textItem.str);
-            if (textItem.hasEOL) {
-              strBuf.push("\n");
-            }
-          }
-          // Store the normalized page content (text items) as one string.
-          [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
-            normalize(strBuf.join(""));
-        } catch (ex) {
-          if (pdfDoc !== this._pdfDocument) {
-            resolve();
-            return;
-          }
-          console.error(`Unable to get text content for page ${i + 1}`, ex);
-          // Page error -- assuming no text content.
-          [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
-            ["", null, false];
         }
-        resolve();
-      });
+        // Store the normalized page content (text items) as one string.
+        [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
+          normalize(strBuf.join(""));
+      } catch (ex) {
+        if (isStale()) {
+          resolve();
+          return;
+        }
+        console.error(`Unable to get text content for page ${i + 1}`, ex);
+        // Page error -- assuming no text content.
+        [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] = [
+          "",
+          null,
+          false,
+        ];
+      }
+      this.#textExtracted[i] = true;
+      resolve();
+    });
+  }
+
+  /**
+   * Drop the extractions queued for the previous page order, and queue every
+   * page whose text wasn't extracted yet at its current index.
+   */
+  #requeueMissingText() {
+    this.#textGeneration++;
+    this.#textQueue = Promise.resolve();
+    for (let i = 0, ii = this._extractTextPromises.length; i < ii; i++) {
+      if (this.#textExtracted[i] !== true) {
+        this.#queueExtractText(i);
+      }
     }
   }
 
@@ -1116,13 +1160,21 @@ class PDFFindController {
       const contents = new Map();
       const diffs = new Map();
       const diacritics = new Map();
+      const extracted = new Map();
       for (const pageNum of pageNumbers) {
         promises.set(pageNum, this._extractTextPromises[pageNum - 1]);
         contents.set(pageNum, this._pageContents[pageNum - 1]);
         diffs.set(pageNum, this._pageDiffs[pageNum - 1]);
         diacritics.set(pageNum, this._hasDiacritics[pageNum - 1]);
+        extracted.set(pageNum, this.#textExtracted[pageNum - 1]);
       }
-      this.#copiedPageData = { promises, contents, diffs, diacritics };
+      this.#copiedPageData = {
+        promises,
+        contents,
+        diffs,
+        diacritics,
+        extracted,
+      };
       return;
     }
 
@@ -1137,6 +1189,7 @@ class PDFFindController {
         contents: this._pageContents,
         diffs: this._pageDiffs,
         diacritics: this._hasDiacritics,
+        extracted: this.#textExtracted,
       };
     }
 
@@ -1145,6 +1198,8 @@ class PDFFindController {
       this._pageContents = this.#savedPageData.contents;
       this._pageDiffs = this.#savedPageData.diffs;
       this._hasDiacritics = this.#savedPageData.diacritics;
+      this.#textExtracted = this.#savedPageData.extracted;
+      this.#requeueMissingText();
       return;
     }
 
@@ -1170,6 +1225,8 @@ class PDFFindController {
     const pageContents = (this._pageContents = []);
     const pageDiffs = (this._pageDiffs = []);
     const hasDiacritics = (this._hasDiacritics = []);
+    const prevExtracted = this.#textExtracted;
+    const textExtracted = (this.#textExtracted = []);
     for (let i = 1, ii = pagesMapper.pagesNumber; i <= ii; i++) {
       const prevPageNumber = pagesMapper.getPrevPageNumber(i);
       if (prevPageNumber < 0) {
@@ -1180,6 +1237,7 @@ class PDFFindController {
         pageContents.push(this.#copiedPageData?.contents.get(src) ?? "");
         pageDiffs.push(this.#copiedPageData?.diffs.get(src) ?? null);
         hasDiacritics.push(this.#copiedPageData?.diacritics.get(src) ?? false);
+        textExtracted.push(this.#copiedPageData?.extracted.get(src) === true);
         continue;
       }
       extractTextPromises.push(
@@ -1188,7 +1246,9 @@ class PDFFindController {
       pageContents.push(prevContents[prevPageNumber - 1] ?? "");
       pageDiffs.push(prevDiffs[prevPageNumber - 1] ?? null);
       hasDiacritics.push(prevDiacritics[prevPageNumber - 1] ?? false);
+      textExtracted.push(prevExtracted[prevPageNumber - 1] === true);
     }
+    this.#requeueMissingText();
     if (this.#state) {
       this.#nextMatch();
     }
