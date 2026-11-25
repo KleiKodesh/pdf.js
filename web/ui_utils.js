@@ -15,7 +15,7 @@
 
 const DEFAULT_SCALE_VALUE = "auto";
 const DEFAULT_SCALE = 1.0;
-const DEFAULT_SCALE_DELTA = 1.1;
+const DEFAULT_SCALE_DELTA = 1.02;
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 25.0;
 const UNKNOWN_SCALE = 0;

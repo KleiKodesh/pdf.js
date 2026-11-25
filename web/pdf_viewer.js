@@ -75,7 +75,9 @@ import { PDFRenderingQueue } from "./pdf_rendering_queue.js";
 import { RenderingStates } from "./renderable_view.js";
 import { SimpleLinkService } from "./pdf_link_service.js";
 
-const DEFAULT_CACHE_SIZE = 10;
+// Each cached page holds a rendered canvas (~10 MB for an A4 page at 1.5x
+// devicePixelRatio); the cache still grows to 2 * visiblePages + 1 as needed.
+const DEFAULT_CACHE_SIZE = 3;
 
 const PagesCountLimit = {
   FORCE_SCROLL_MODE_PAGE: 10000,

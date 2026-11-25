@@ -21,7 +21,8 @@
 import { RenderingCancelledException } from "pdfjs-lib";
 import { RenderingStates } from "./renderable_view.js";
 
-const CLEANUP_TIMEOUT = 30000;
+// Release the canvases of off-screen pages soon after scrolling stops.
+const CLEANUP_TIMEOUT = 5000;
 
 /**
  * Controls rendering of the views for pages and thumbnails.
