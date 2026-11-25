@@ -1258,6 +1258,9 @@ class PDFViewer {
   }
 
   onPagesEdited({ pagesMapper, type, hasBeenCut, pageNumbers }) {
+    // Move the document's cached page proxies with their pages first.
+    this.pdfDocument?.onPagesEdited(type);
+
     if (type === "copy") {
       this.#copiedPageViews = new Map();
       for (const pageNum of pageNumbers) {

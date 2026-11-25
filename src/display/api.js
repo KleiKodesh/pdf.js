@@ -756,6 +756,17 @@ class PDFDocumentProxy {
   }
 
   /**
+   * Keep the cached page proxies in step with a pages edit (move, delete,
+   * cut, paste, ...) that was applied to the pages mapper.
+   * PLEASE NOTE: Only intended for usage within the viewer.
+   * @param {string} type - The `type` of the "pagesedited" event.
+   * @ignore
+   */
+  onPagesEdited(type) {
+    this._transport.onPagesEdited(type);
+  }
+
+  /**
    * @type {AnnotationStorage} Storage for annotation data in forms.
    */
   get annotationStorage() {
@@ -2422,6 +2433,14 @@ class WorkerTransport {
   // Keyed by `pageIndex`.
   #pagePromises = new Map();
 
+  // The loaded page proxy at each `pageIndex`.
+  #pagesByIndex = new Map();
+
+  #pagesEditGeneration = 0;
+
+  // The page proxies' positions before a delete/cut, until it can't be undone.
+  #savedPagesByIndex = null;
+
   #pageRefCache = new Map();
 
   #passwordCapability = null;
@@ -2497,6 +2516,58 @@ class WorkerTransport {
   updatePage(page) {
     this.#pageCache.set(page._id, page);
     this.#pagePromises.set(page._pageIndex, Promise.resolve(page));
+    this.#pagesByIndex.set(page._pageIndex, page);
+  }
+
+  /**
+   * Page proxies are cached by position, and a proxy keeps what it already
+   * loaded (size, rotation, operator lists) while asking for the page now at
+   * its position. The viewer only moves the proxies of its page views, so a
+   * proxy loaded for another page (thumbnail, find, ...) stayed at its old
+   * position and the page moved there showed the old page's content.
+   * Move every loaded proxy along with its page.
+   */
+  onPagesEdited(type) {
+    switch (type) {
+      case "copy":
+      case "cancelCopy":
+        return;
+      case "cleanSavedData":
+        this.#savedPagesByIndex = null;
+        return;
+    }
+    this.#pagesEditGeneration++;
+
+    let pagesByIndex;
+    if (type === "cancelDelete") {
+      pagesByIndex = this.#savedPagesByIndex;
+      this.#savedPagesByIndex = null;
+      if (!pagesByIndex) {
+        return;
+      }
+    } else {
+      const prevPagesByIndex = this.#pagesByIndex;
+      if (type === "delete" || type === "cut") {
+        this.#savedPagesByIndex = new Map(prevPagesByIndex);
+      }
+      pagesByIndex = new Map();
+      const placed = new Set();
+      for (let i = 1, ii = this.pagesMapper.pagesNumber; i <= ii; i++) {
+        const prevPageNumber = this.pagesMapper.getPrevPageNumber(i);
+        const page = prevPagesByIndex.get(prevPageNumber - 1);
+        if (page && !placed.has(page)) {
+          placed.add(page);
+          pagesByIndex.set(i - 1, page);
+        }
+      }
+    }
+    this.#pagePromises.clear();
+    this.#pagesByIndex = new Map();
+    for (const [index, page] of pagesByIndex) {
+      page._pageIndex = index;
+      this.#pagePromises.set(index, Promise.resolve(page));
+      this.#pagesByIndex.set(index, page);
+    }
   }
 
   #cacheSimpleMethod(name, data = null) {
@@ -2619,6 +2690,8 @@ class WorkerTransport {
     }
     this.#pageCache.clear();
     this.#pagePromises.clear();
+    this.#pagesByIndex.clear();
+    this.#savedPagesByIndex = null;
     this.#pageRefCache.clear();
     // Allow `AnnotationStorage`-related clean-up when destroying the document.
     if (Object.hasOwn(this, "annotationStorage")) {
@@ -3039,6 +3112,7 @@ class WorkerTransport {
     if (cachedPromise) {
       return cachedPromise;
     }
+    const pagesEditGeneration = this.#pagesEditGeneration;
     const promise = this.messageHandler
       .sendWithPromise("GetPage", {
         pageIndex: newPageIndex,
@@ -3051,14 +3125,29 @@ class WorkerTransport {
           this.#pageRefCache.set(pageInfo.refStr, newPageIndex);
         }
 
+        // When the pages were edited while this one was loading, place the
+        // proxy where its page is now, rather than at the old position.
+        let index = pageIndex;
+        let indexed = true;
+        if (pagesEditGeneration !== this.#pagesEditGeneration) {
+          index = this.pagesMapper.getPageNumber(newPageIndex + 1) - 1;
+          indexed = index >= 0 && !this.#pagesByIndex.has(index);
+          index = Math.max(index, 0);
+        }
         const page = new PDFPageProxy(
-          pageIndex,
+          index,
           pageInfo,
           this,
           this.pagesMapper,
           this._params.pdfBug
         );
         this.#pageCache.set(page._id, page);
+        if (indexed) {
+          this.#pagesByIndex.set(index, page);
+          if (pagesEditGeneration !== this.#pagesEditGeneration) {
+            this.#pagePromises.set(index, promise);
+          }
+        }
         return page;
       });
     this.#pagePromises.set(pageIndex, promise);
