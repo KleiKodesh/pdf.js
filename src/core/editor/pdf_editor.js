@@ -1871,7 +1871,15 @@ class PDFEditor {
    */
   #buildOutline(allDocumentData) {
     const outlineItems = [];
+    // A document listed in more than one entry (e.g. when a page of it was
+    // copied) contributes its outline once, not once per entry; its
+    // destinations resolve through the first entry's pages.
+    const seenDocuments = new Set();
     for (const documentData of allDocumentData) {
+      if (seenDocuments.has(documentData.document)) {
+        continue;
+      }
+      seenDocuments.add(documentData.document);
       const { outline } = documentData;
       if (!outline?.length) {
         continue;
