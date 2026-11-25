@@ -1178,6 +1178,34 @@ if (
   };
 }
 
+// Older Chromium/WebView2 runtimes (before 136) lack these; without them no
+// PDF loads at all ("getOrInsertComputed is not a function" in both threads,
+// "toHex is not a function" in the worker's fingerprint code).
+for (const MapClass of [Map, WeakMap]) {
+  if (typeof MapClass.prototype.getOrInsert !== "function") {
+    MapClass.prototype.getOrInsert = function (key, value) {
+      if (!this.has(key)) {
+        this.set(key, value);
+      }
+      return this.get(key);
+    };
+  }
+  if (typeof MapClass.prototype.getOrInsertComputed !== "function") {
+    MapClass.prototype.getOrInsertComputed = function (key, callbackFn) {
+      if (!this.has(key)) {
+        this.set(key, callbackFn(key));
+      }
+      return this.get(key);
+    };
+  }
+}
+if (typeof Uint8Array.prototype.toHex !== "function") {
+  // eslint-disable-next-line no-extend-native
+  Uint8Array.prototype.toHex = function () {
+    return Array.from(this, b => b.toString(16).padStart(2, "0")).join("");
+  };
+}
+
 // TODO: Remove this once `Iterator.prototype.join` is generally available.
 if (typeof Iterator.prototype.join !== "function") {
   // eslint-disable-next-line no-extend-native
