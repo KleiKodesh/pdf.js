@@ -279,6 +279,8 @@ class PDFViewer {
 
   #scrollTimeoutId = null;
 
+  #lastScrollTop = 0;
+
   #staleLocation = false;
 
   #switchAnnotationEditorModeAC = null;
@@ -1490,6 +1492,16 @@ class PDFViewer {
     if (this.pagesCount === 0) {
       return;
     }
+
+    // A jump of more than one viewport height in a single update (dragging
+    // the scrollbar to a distant page) cancels the renders still in progress
+    // for pages that are no longer visible, so the target page doesn't share
+    // the main thread with them and shows up sooner.
+    const { scrollTop, clientHeight } = this.container;
+    if (Math.abs(scrollTop - this.#lastScrollTop) > clientHeight) {
+      this._cancelRendering();
+    }
+    this.#lastScrollTop = scrollTop;
 
     if (this.#scrollTimeoutId) {
       clearTimeout(this.#scrollTimeoutId);
