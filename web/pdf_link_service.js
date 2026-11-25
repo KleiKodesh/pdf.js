@@ -200,7 +200,18 @@ class PDFLinkService {
       "textlayerrendered",
       evt => {
         if (evt.pageNumber === pageNumber) {
-          evt.source.textLayer.div.focus();
+          // Never steal focus from an element being edited (e.g. a rename
+          // field in the outline that was started on another page): this
+          // late focus would blur, and so cancel, the edit.
+          const textLayerDiv = evt.source.textLayer.div;
+          const active = textLayerDiv.ownerDocument.activeElement;
+          if (
+            !active?.isContentEditable &&
+            active?.tagName !== "INPUT" &&
+            active?.tagName !== "TEXTAREA"
+          ) {
+            textLayerDiv.focus();
+          }
           ac.abort();
         }
       },
