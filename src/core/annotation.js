@@ -498,6 +498,25 @@ class AnnotationFactory {
             StampAnnotation.createNewAnnotation(xref, annotation, changes, {})
           );
           break;
+        default:
+          // A comment added to, or edited on, an existing annotation that has
+          // no editor (square, text, underline, ...): keep its dictionary and
+          // only update /Contents, /M and /Popup.
+          if (annotation.oldAnnotation && annotation.popup) {
+            if (!annotation.popupRef) {
+              annotation.popup.rect ??=
+                annotation.oldAnnotation.getArray("Rect");
+            }
+            promises.push(
+              ExistingAnnotationComment.createNewAnnotation(
+                xref,
+                annotation,
+                changes,
+                {}
+              )
+            );
+          }
+          break;
       }
     }
 
@@ -4501,6 +4520,22 @@ class PopupAnnotation extends Annotation {
     popup.set("Parent", parent);
 
     return popup;
+  }
+
+  static async createNewAppearanceStream(annotation, xref, params) {
+    return null;
+  }
+}
+
+/**
+ * Saves only the comment (/Contents and /Popup) of an existing annotation that
+ * can't be edited otherwise; see AnnotationFactory.saveNewAnnotations.
+ */
+class ExistingAnnotationComment extends MarkupAnnotation {
+  static createNewDict(annotation, xref, _params) {
+    const dict = annotation.oldAnnotation;
+    dict.set("M", `D:${getModificationDate(annotation.modificationDate)}`);
+    return dict;
   }
 
   static async createNewAppearanceStream(annotation, xref, params) {
