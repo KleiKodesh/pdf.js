@@ -1,0 +1,51 @@
+name: Sidecar tests
+on:
+  push:
+    branches:
+      - sidecar-index
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint the changed files
+        run: >
+          npx eslint src/core/pdf_sidecar.js src/core/sidecar_find.js
+          src/core/worker.js src/display/api.js web/pdf_sidecar_store.js
+          web/view_history.js web/app.js test/unit/pdf_sidecar_spec.js
+          test/sidecar_bench.mjs
+
+      - name: Build generic
+        run: npx gulp generic
+
+      - name: Unit tests (lib-legacy, all CLI specs incl. pdf_sidecar_spec)
+        run: npx gulp unittestcli 2>&1 | tee unittest.log
+
+      - name: Key results
+        if: always()
+        run: |
+          echo "### Sidecar + find/text specs"
+          grep -E "pdf_sidecar|specs?, [0-9]+ failures?|Failures:|^[0-9]+\) " unittest.log | head -60 || true
+
+      - name: Sidecar bench (build time/size, direct search vs getTextContent)
+        run: |
+          for f in tracemonkey.pdf ArabicCIDTrueType.pdf basicapi.pdf; do
+            node test/sidecar_bench.mjs "test/pdfs/$f" the trace JavaScript "$(printf 'ال')"
+          done
