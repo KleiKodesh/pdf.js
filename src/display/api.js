@@ -1085,7 +1085,10 @@ class PDFDocumentProxy {
 
   /**
    * @typedef {object} PageInfo
-   * @property {null|Uint8Array} [document]
+   * @property {null|Uint8Array|PDFDocumentProxy} [document] The page source:
+   *  null = this document, the bytes of another PDF, or another open document
+   *  loaded in the same worker (read through its own stream, so a
+   *  range-loaded one reads only the copied pages' data).
    * @property {ImageBitmap} [image] Image to insert as a synthetic page.
    * @property {Array<Array<number>|number>} [includePages]
    *  included ranges or indices.
@@ -3079,6 +3082,24 @@ class WorkerTransport {
     copyLevels = null,
     { flatten = false, intent = "print", outline = null } = {}
   ) {
+    // A page source that is another open document: sent as its id. It must
+    // run in the same worker, which then reads its pages through its own
+    // (possibly range-loaded) stream - only the copied pages' data is read.
+    const toWorker = pageInfo => {
+      if (!(pageInfo?.document instanceof PDFDocumentProxy)) {
+        return pageInfo;
+      }
+      const transport = pageInfo.document._transport;
+      if (transport.loadingTask._worker !== this.loadingTask._worker) {
+        throw new Error(
+          "extractPages: a source document must use the same worker."
+        );
+      }
+      return { ...pageInfo, document: transport.loadingTask.docId };
+    };
+    pageInfos = Array.isArray(pageInfos)
+      ? pageInfos.map(toWorker)
+      : toWorker(pageInfos);
     const params = {
       pageInfos,
       flatten,

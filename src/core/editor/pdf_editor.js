@@ -298,6 +298,9 @@ class PDFEditor {
       }
       const oldRef = obj;
       obj = await xref.fetchAsync(oldRef);
+      if (obj instanceof BaseStream) {
+        await this.#ensureStreamData(obj, xref);
+      }
       const mappedRef = oldRefMapping.get(oldRef);
       if (mappedRef) {
         // Another concurrent traversal may have allocated the clone while the
@@ -442,6 +445,22 @@ class PDFEditor {
       isName(subtype, "CIDFontType0C") ||
       isName(subtype, "OpenType")
     );
+  }
+
+  /**
+   * A stream of a range-loaded document may not have its data yet: load the
+   * missing parts (all at once) before the copy reads them.
+   * @param {BaseStream} stream
+   * @param {XRef} xref
+   */
+  async #ensureStreamData(stream, xref) {
+    const missing = stream
+      .getBaseStreams()
+      ?.filter(base => !base.isDataLoaded)
+      .map(base => ({ begin: base.start, end: base.end }));
+    if (missing?.length) {
+      await xref.stream.manager.requestRanges(missing);
+    }
   }
 
   /**
