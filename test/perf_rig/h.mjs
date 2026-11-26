@@ -156,17 +156,28 @@ window.searchRun = async o => {
   }
   await fetch("/bytes?reset=1");
   const url = `/pdf/wv2/${o.book}.pdf`;
-  task = getDocument({
-    worker,
-    range: await rangeSource(url),
-    rangeChunkSize: 65536,
-    disableAutoFetch: true,
-    disableStream: true,
-    cMapUrl: R + "cmaps/",
-    cMapPacked: true,
-    standardFontDataUrl: R + "standard_fonts/",
-    wasmUrl: R + "wasm/",
-  });
+  task = getDocument(
+    o.full
+      ? {
+          worker,
+          url,
+          cMapUrl: R + "cmaps/",
+          cMapPacked: true,
+          standardFontDataUrl: R + "standard_fonts/",
+          wasmUrl: R + "wasm/",
+        }
+      : {
+          worker,
+          range: await rangeSource(url),
+          rangeChunkSize: 65536,
+          disableAutoFetch: true,
+          disableStream: true,
+          cMapUrl: R + "cmaps/",
+          cMapPacked: true,
+          standardFontDataUrl: R + "standard_fonts/",
+          wasmUrl: R + "wasm/",
+        }
+  );
   const doc = await task.promise;
   const base = await bytes();
   const eb = new EventBus();
