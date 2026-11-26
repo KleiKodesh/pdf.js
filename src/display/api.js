@@ -368,6 +368,9 @@ function getDocument(src = {}) {
     });
     task._worker = worker;
   }
+  // The worker the document runs in, whether given or created here
+  // (`_worker` is only the one created here: destroy() ends it).
+  task._usedWorker = worker;
   if (!disableWorkerRendering) {
     const rendererWorker = RendererWorker.create({
       verbosity,
@@ -542,6 +545,9 @@ class PDFDocumentLoadingTask {
    * @private
    */
   _worker = null;
+
+  /** @type {PDFWorker | null} The worker the document runs in. */
+  _usedWorker = null;
 
   /**
    * @private
@@ -3090,16 +3096,23 @@ class WorkerTransport {
         return pageInfo;
       }
       const transport = pageInfo.document._transport;
-      if (transport.loadingTask._worker !== this.loadingTask._worker) {
+      if (
+        !transport.loadingTask._usedWorker ||
+        transport.loadingTask._usedWorker !== this.loadingTask._usedWorker
+      ) {
         throw new Error(
           "extractPages: a source document must use the same worker."
         );
       }
       return { ...pageInfo, document: transport.loadingTask.docId };
     };
-    pageInfos = Array.isArray(pageInfos)
-      ? pageInfos.map(toWorker)
-      : toWorker(pageInfos);
+    try {
+      pageInfos = Array.isArray(pageInfos)
+        ? pageInfos.map(toWorker)
+        : toWorker(pageInfos);
+    } catch (ex) {
+      return Promise.reject(ex);
+    }
     const params = {
       pageInfos,
       flatten,
