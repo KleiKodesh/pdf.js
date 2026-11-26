@@ -685,6 +685,7 @@ class PDFFindController {
     this.#textGeneration++;
     this.#textExtracted = [];
     this.#textLanes = [];
+    this.#nextLane = 0;
     this._matchesCountTotal = 0;
     this._pagesToSearch = null;
     this._pendingFindMatches = new Set();
@@ -986,6 +987,7 @@ class PDFFindController {
     }
     this.#textExtracted = [];
     this.#textLanes = [];
+    this.#nextLane = 0;
     for (let i = 0, ii = this._linkService.pagesCount; i < ii; i++) {
       this.#queueExtractText(i);
     }
@@ -1111,58 +1113,64 @@ class PDFFindController {
       ? RANDOM_ACCESS_TEXT_LANES
       : 1;
     const lane = this.#nextLane++ % laneCount;
-    this.#textLanes[lane] = (this.#textLanes[lane] || Promise.resolve()).then(
-      async () => {
+    // The first page queued is read alone (its result shows first), then the
+    // other lanes start.
+    const start = this.#textLanes.length
+      ? this.#textLanes[0]
+      : Promise.resolve();
+    this.#textLanes[lane] = (this.#textLanes[lane] || start).then(async () => {
+      if (isStale()) {
+        resolve();
+        return;
+      }
+      try {
+        const pdfPage = await pdfDoc.getPage(i + 1);
+        const textContent = await pdfPage.getTextContent(textOptions);
+        this.#keepTextContent(i, textContent);
+
         if (isStale()) {
           resolve();
           return;
         }
-        try {
-          const pdfPage = await pdfDoc.getPage(i + 1);
-          const textContent = await pdfPage.getTextContent(textOptions);
-          this.#keepTextContent(i, textContent);
+        const strBuf = [];
+        const { items } = textContent;
+        const copies = findDrawnCopies(items);
 
-          if (isStale()) {
-            resolve();
-            return;
+        for (let k = 0, kk = items.length; k < kk; k++) {
+          const textItem = items[k];
+          strBuf.push(
+            copies[k] ? "\0".repeat(textItem.str.length) : textItem.str
+          );
+          if (textItem.hasEOL) {
+            strBuf.push("\n");
           }
-          const strBuf = [];
-          const { items } = textContent;
-          const copies = findDrawnCopies(items);
-
-          for (let k = 0, kk = items.length; k < kk; k++) {
-            const textItem = items[k];
-            strBuf.push(
-              copies[k] ? "\0".repeat(textItem.str.length) : textItem.str
-            );
-            if (textItem.hasEOL) {
-              strBuf.push("\n");
-            }
-          }
-          const pageString = strBuf.join("");
-          // Store the normalized page content (text items) as one string.
-          [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
-            normalize(pageString);
-          // The text index learns the page from this same extraction (one
-          // getTextContent per page for both), in idle time: never on the
-          // search's path.
-          if (this.textIndex?.addPages && !this.textIndex.indexed[i]) {
-            this.#queueIndexPage(this.textIndex, i, pageString);
-          }
-        } catch (ex) {
-          if (isStale()) {
-            resolve();
-            return;
-          }
-          console.error(`Unable to get text content for page ${i + 1}`, ex);
-          // Page error -- assuming no text content.
-          [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
-            ["", null, false];
         }
-        this.#textExtracted[i] = true;
-        resolve();
+        const pageString = strBuf.join("");
+        // Store the normalized page content (text items) as one string.
+        [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
+          normalize(pageString);
+        // The text index learns the page from this same extraction (one
+        // getTextContent per page for both), in idle time: never on the
+        // search's path.
+        if (this.textIndex?.addPages && !this.textIndex.indexed[i]) {
+          this.#queueIndexPage(this.textIndex, i, pageString);
+        }
+      } catch (ex) {
+        if (isStale()) {
+          resolve();
+          return;
+        }
+        console.error(`Unable to get text content for page ${i + 1}`, ex);
+        // Page error -- assuming no text content.
+        [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] = [
+          "",
+          null,
+          false,
+        ];
       }
-    );
+      this.#textExtracted[i] = true;
+      resolve();
+    });
   }
 
   /**
@@ -1172,6 +1180,7 @@ class PDFFindController {
   #requeueMissingText() {
     this.#textGeneration++;
     this.#textLanes = [];
+    this.#nextLane = 0;
     for (let i = 0, ii = this._extractTextPromises.length; i < ii; i++) {
       if (this.#textExtracted[i] !== true) {
         this.#queueExtractText(i);
