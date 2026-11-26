@@ -725,13 +725,15 @@ class PDFDataRangeTransport {
  *   section (/ByteRange), a linearized file or a structure that isn't
  *   provably standard is never rewritten: the save appends as usual. The
  *   default value is `false`.
- * @property {boolean} [sectionOnly] - Resolve to `{ data, start, length }`
- *   instead of the whole file: `data` is the new update section, to be
- *   written at byte `start` of the loaded file (`length` bytes long), with
- *   the file cut right after it. Without changes `data` is empty and `start`
- *   equals `length`. With `mergeIntoLastUpdate`, `start` is where the
- *   rewritten last section began; otherwise it is `length`. Saves holding
- *   the whole file a second time. The default value is `false`.
+ * @property {boolean} [sectionOnly] - Resolve to
+ *   `{ data, start, length, anchor }` instead of the whole file: `data` is
+ *   the new update section, to be written at byte `start` of the loaded file
+ *   (`length` bytes long), with the file cut right after it; `anchor` is up
+ *   to 64 loaded bytes right before `start`, to check the file on disk.
+ *   Without changes `data` is empty and `start` equals `length`. With
+ *   `mergeIntoLastUpdate`, `start` is where the rewritten last section
+ *   began; otherwise it is `length`. Saves holding the whole file a second
+ *   time. The default value is `false`.
  */
 
 /**

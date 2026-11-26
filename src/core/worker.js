@@ -902,6 +902,7 @@ class WorkerMessageHandler {
               data: new Uint8Array(0),
               start: stream.bytes.length,
               length: stream.bytes.length,
+              anchor: new Uint8Array(0),
             }
           : stream.bytes;
 
@@ -1140,7 +1141,18 @@ class WorkerMessageHandler {
         sectionOnly,
       })
         .then(result =>
-          sectionOnly ? { ...result, length: stream.bytes.length } : result
+          sectionOnly
+            ? {
+                ...result,
+                length: stream.bytes.length,
+                // The loaded bytes right before `start`: a writer checks
+                // them on disk before it writes the section there.
+                anchor: stream.bytes.slice(
+                  Math.max(0, result.start - 64),
+                  result.start
+                ),
+              }
+            : result
         )
         .finally(() => {
           xref.resetNewTemporaryRef();
