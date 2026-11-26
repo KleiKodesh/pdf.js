@@ -43,14 +43,14 @@ const WORD_CHAR = /[\p{L}\p{N}_]/u;
 function normalizeText(text, matchDiacritics) {
   let s = text
     .normalize("NFD")
-    .replace(REPLACE_RE, c => CHARACTERS_TO_NORMALIZE.get(c));
+    .replaceAll(REPLACE_RE, c => CHARACTERS_TO_NORMALIZE.get(c));
   if (!matchDiacritics) {
-    s = s.replace(/\p{M}+/gu, "");
+    s = s.replaceAll(/\p{M}+/gu, "");
   }
   return s
-    .replace(/(\p{Ll})-\n(?=\p{Ll})|(\p{Lu})-\n(?=\p{L})/gu, "$1$2")
-    .replace(/(\S-)\n/g, "$1")
-    .replace(/\n/g, " ");
+    .replaceAll(/(\p{Ll})-\n(?=\p{Ll})|(\p{Lu})-\n(?=\p{L})/gu, "$1$2")
+    .replaceAll(/(\S-)\n/g, "$1")
+    .replaceAll("\n", " ");
 }
 
 function buildMatcher(

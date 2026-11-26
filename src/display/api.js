@@ -883,7 +883,7 @@ class PDFDocumentProxy {
   }
 
   /**
-   * @returns {Promise<Object>} The sidecar data, as built so far.
+   * @returns {Promise<object>} The sidecar data, as built so far.
    */
   getSidecar() {
     return this._transport.messageHandler.sendWithPromise("SidecarGet", null);
@@ -891,7 +891,7 @@ class PDFDocumentProxy {
 
   /**
    * Hands a stored sidecar back to the worker.
-   * @param {Object} data
+   * @param {object} data
    * @returns {Promise<boolean>} false when the format version doesn't match.
    */
   setSidecar(data) {

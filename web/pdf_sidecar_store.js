@@ -89,9 +89,7 @@ const PDFSidecarStore = {
     return run("readwrite", s => s.put(buffer, fingerprint));
   },
 
-  delete(fingerprint) {
-    return run("readwrite", s => s.delete(fingerprint));
-  },
+  delete: fingerprint => run("readwrite", s => s.delete(fingerprint)),
 
   /** Deletes every sidecar whose fingerprint is not in `fingerprints`. */
   retainOnly(fingerprints) {
@@ -137,11 +135,13 @@ async function ensureSidecar(pdfDocument, fingerprint, options = {}) {
     return;
   }
   const idle = () =>
-    new Promise(resolve =>
-      typeof requestIdleCallback === "function"
-        ? requestIdleCallback(resolve, { timeout: 1000 })
-        : setTimeout(resolve, 0)
-    );
+    new Promise(resolve => {
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(resolve, { timeout: 1000 });
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
   let fromPage = 0;
   while (isCurrent()) {
     await idle();

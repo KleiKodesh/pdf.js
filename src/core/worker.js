@@ -33,11 +33,11 @@ import { LocalPdfManager, NetworkPdfManager } from "./pdf_manager.js";
 import { MessageHandler, wrapReason } from "../shared/message_handler.js";
 import { AnnotationFactory } from "./annotation.js";
 import { clearGlobalCaches } from "./cleanup_helper.js";
+import { PdfSidecar } from "./pdf_sidecar.js";
 import { PDFWorkerStream } from "./worker_stream.js";
 import { stringToPDFString } from "./string_utils.js";
 import { StructTreeRoot } from "./struct_tree.js";
 import { writeEditedOutline } from "./edited_outline.js";
-import { PdfSidecar } from "./pdf_sidecar.js";
 
 class WorkerTask {
   #capability = createPromiseCapability();

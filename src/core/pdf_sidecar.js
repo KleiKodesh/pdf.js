@@ -93,10 +93,7 @@ function rawSpan(stream) {
   while (s && !(typeof s.start === "number" && s.bytes !== undefined)) {
     s = s.str ?? s.stream ?? null;
   }
-  if (!s || typeof s.end !== "number") {
-    return null;
-  }
-  return [s.start, s.end - s.start];
+  return !s || typeof s.end !== "number" ? null : [s.start, s.end - s.start];
 }
 
 function streamEntry(xref, ref) {

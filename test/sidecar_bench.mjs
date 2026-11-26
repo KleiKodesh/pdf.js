@@ -61,7 +61,7 @@ await sidecar.build({ fromPage: 0, maxPages: numPages }, handler, task);
 const buildMs = ms(t);
 const data = serialize(sidecar.data);
 console.log(
-  `FILE ${file.split(/[\/]/).pop()} pages=${numPages} ` +
+  `FILE ${file.split(/[/\\]/).pop()} pages=${numPages} ` +
     `bytes=${bytes.length} sidecarBuildMs=${buildMs} ` +
     `sidecarBytes=${data.length} fonts=${sidecar.data.fonts.length}`
 );
