@@ -27,6 +27,7 @@ try {
   await wait(800);
   // PDF bytes read in this session (cold open, jumps and fling), before the warm reopen.
   rec.bytesTotal = await page.evaluate(() => totalBytes());
+  rec.rendered = await page.evaluate(() => [...window.__rendered]);
   rec.warm = await page.evaluate(o => openView(o), opts);
   console.log(JSON.stringify(rec));
 } finally {

@@ -37,6 +37,14 @@ obj(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
 let seed = 7;
 const rnd = () =>
   (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+// Page dicts first, together (as most producers write them), then each page's content and image.
+for (let i = 0; i < pages; i++) {
+  const p = first + i * 3;
+  obj(
+    p,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 864] /Resources << /Font << /F1 3 0 R >> /XObject << /Im0 ${p + 2} 0 R >> >> /Contents ${p + 1} 0 R >>`
+  );
+}
 for (let i = 0; i < pages; i++) {
   const c = createCanvas(W, H);
   const g = c.getContext("2d");
@@ -45,12 +53,7 @@ for (let i = 0; i < pages; i++) {
   g.fillStyle = "#222";
   for (let l = 0; l < 60; l++) {
     for (let w = 0; w < 14; w++) {
-      g.fillRect(
-        100 + w * 105 + rnd() * 20,
-        120 + l * 37,
-        40 + rnd() * 50,
-        18 + rnd() * 6
-      );
+      g.fillRect(100 + w * 105 + rnd() * 20, 120 + l * 37, 40 + rnd() * 50, 18 + rnd() * 6);
     }
   }
   for (let k = 0; k < 5000; k++) {
@@ -60,15 +63,7 @@ for (let i = 0; i < pages; i++) {
   const jpeg = c.toBuffer("image/jpeg", 40);
   const p = first + i * 3;
   const content = `q 612 0 0 864 0 0 cm /Im0 Do Q BT /F1 10 Tf 40 20 Td (page ${i + 1} amar rav) Tj ET`;
-  obj(
-    p,
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 864] /Resources << /Font << /F1 3 0 R >> /XObject << /Im0 ${p + 2} 0 R >> >> /Contents ${p + 1} 0 R >>`
-  );
-  obj(p + 1, [
-    `<< /Length ${content.length} >>\nstream\n`,
-    content,
-    "\nendstream",
-  ]);
+  obj(p + 1, [`<< /Length ${content.length} >>\nstream\n`, content, "\nendstream"]);
   obj(p + 2, [
     `<< /Type /XObject /Subtype /Image /Width ${W} /Height ${H} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`,
     jpeg,

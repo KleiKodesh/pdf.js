@@ -57,11 +57,11 @@ jobs:
         run: |
           PORT=5291 DIST=$PWD/rig-dist BOOKS=$PWD/rig-books node test/perf_rig/server.mjs &
           sleep 2
-          node test/perf_rig/ab.mjs ${{ matrix.book }} 7 '[
+          BOOKS=$PWD/rig-books node test/perf_rig/ab.mjs ${{ matrix.book }} 7 '[
             {"name":"full","port":5291,"opts":{"mode":"full"}},
             {"name":"sparse","port":5291,"opts":{"mode":"sparse"}},
-            {"name":"sparse+map","port":5291,"opts":{"mode":"sparse","map":true}},
-            {"name":"sparse+map512","port":5291,"opts":{"mode":"sparse","map":true,"chunk":524288}}
-          ]' | tee rig.log
+            {"name":"sparse+map","port":5291,"opts":{"mode":"sparse","map":true},"bytesCheck":true}
+          ]' | tee rig.log; test ${PIPESTATUS[0]} -eq 0
           echo "PDF size: $(stat -c %s rig-books/${{ matrix.book }}.pdf) bytes"
-          grep -E "^RESULT|FAIL" rig.log
+          grep -E "^RESULT|^BYTES|FAIL" rig.log
+          ! grep -q "BYTES TOO MANY" rig.log

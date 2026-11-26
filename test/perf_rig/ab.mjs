@@ -19,6 +19,38 @@ const flat = r => {
   }
   return f;
 };
+// Bytes check (random access): a session may read only the pages it touched (rendered, plus
+// the read-ahead around them) and the document's skeleton - never the whole file.
+import { readFileSync, statSync } from "node:fs";
+let bad = 0;
+function checkBytes(name, rec) {
+  const dir = process.env.BOOKS;
+  const map = JSON.parse(readFileSync(`${dir}/${book}.pages.json`, "utf8"));
+  const size = statSync(`${dir}/${book}.pdf`).size;
+  const touched = new Set();
+  for (const n of rec.rendered) {
+    for (let k = n - 1; k <= n + 3; k++) {
+      if (k >= 1 && k <= map.length) {
+        touched.add(k);
+      }
+    }
+  }
+  let allowed = 1 << 20; // skeleton: header, xref, catalog, page tree, fonts
+  for (const n of touched) {
+    const spans = map[n - 1] || [];
+    for (let i = 1; i < spans.length; i += 2) {
+      allowed += spans[i] + 65536; // + one part of rounding per span
+    }
+  }
+  const ok = rec.bytesTotal <= allowed && rec.bytesTotal < size;
+  if (!ok) {
+    bad++;
+  }
+  console.log(
+    `BYTES ${ok ? "OK" : "TOO MANY"} ${book} ${name} read=${rec.bytesTotal} allowed=${allowed} ` +
+      `file=${size} rendered=${rec.rendered.length} pages`
+  );
+}
 for (let i = 0; i < +rounds; i++) {
   for (let j = 0; j < variants.length; j++) {
     const v = variants[(i + j) % variants.length];
@@ -38,7 +70,11 @@ for (let i = 0; i < +rounds; i++) {
           env: { ...process.env, PORT: String(v.port) },
         }
       );
-      res[v.name].push(flat(JSON.parse(out.trim().split("\n").pop())));
+      const rec = JSON.parse(out.trim().split("\n").pop());
+      if (v.bytesCheck) {
+        checkBytes(v.name, rec);
+      }
+      res[v.name].push(flat(rec));
     } catch (e) {
       console.log("FAIL", v.name, String(e.stdout || e).slice(0, 300));
     }
@@ -65,3 +101,4 @@ for (const v of variants) {
         .join(" ")
   );
 }
+process.exitCode = bad ? 1 : 0;

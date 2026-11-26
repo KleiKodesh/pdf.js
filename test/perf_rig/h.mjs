@@ -126,6 +126,8 @@ window.openView = async o => {
     annotationEditorMode: AnnotationEditorType.NONE,
   });
   ls.setViewer(viewer);
+  window.__rendered = new Set();
+  eb.on("pagerendered", e => window.__rendered.add(e.pageNumber));
   eb.on("pagesinit", () => {
     viewer.currentScaleValue = "page-width";
   });
