@@ -10167,6 +10167,40 @@ small scripts as well as for`);
         await loadingTask.destroy();
       });
 
+      it("treats the same file given in several entries as one file", async function () {
+        const other = buildDoc({
+          n: 2,
+          catalog:
+            "/PageMode /UseOutlines /Outlines 6 0 R " +
+            "/OCProperties << /OCGs [4 0 R] /D << /OFF [4 0 R] >> >> ",
+          page: () => "/Resources << /Properties << /L 4 0 R >> >> ",
+          content: i => `/OC /L BDC BT (Page ${i + 1}) Tj ET EMC`,
+          extra: {
+            4: "<< /Type /OCG /Name (Layer1) >>",
+            6: "<< /Type /Outlines /First 7 0 R /Last 7 0 R /Count 1 >>",
+            7: "<< /Title (First) /Parent 6 0 R /Dest [10 0 R /Fit] >>",
+          },
+        });
+        const primary = buildDoc({ n: 1 });
+        // Page 1 of the other file used twice: two entries.
+        const out = await extract(primary, [
+          {
+            document: other.slice(),
+            includePages: [0, 1],
+            pageIndices: [0, 1],
+          },
+          { document: other.slice(), includePages: [0], pageIndices: [2] },
+        ]);
+        const { loadingTask, pdfDoc } = await openDoc(out);
+        expect(await pdfDoc.getPageMode()).toEqual("UseOutlines");
+        expect((await pdfDoc.getOutline()).map(i => i.title)).toEqual([
+          "First",
+        ]);
+        const config = await pdfDoc.getOptionalContentConfig();
+        expect(config.getOrder().length).toEqual(1);
+        await loadingTask.destroy();
+      });
+
       it("doesn't link same-named form fields of merged files", async function () {
         const data = buildDoc({
           n: 1,

@@ -594,6 +594,7 @@ class WorkerMessageHandler {
         }
         let managers = null,
           newDocumentId = 0;
+        const loadedSources = [];
         for (const pageInfo of pageInfos) {
           if (pageInfo.image) {
             continue;
@@ -601,6 +602,18 @@ class WorkerMessageHandler {
           if (pageInfo.document === null) {
             pageInfo.document = pdfManager.pdfDocument;
           } else if (ArrayBuffer.isView(pageInfo.document)) {
+            // The same file given in several entries (e.g. pages of it used
+            // twice) is loaded once, so it's one source file for the editor.
+            const bytes = pageInfo.document;
+            const loaded = loadedSources.find(
+              ({ bytes: other }) =>
+                other.length === bytes.length &&
+                other.every((byte, i) => byte === bytes[i])
+            );
+            if (loaded) {
+              pageInfo.document = loaded.document;
+              continue;
+            }
             const manager = new LocalPdfManager({
               source: pageInfo.document,
               docId: `${docId}_extractPages_${newDocumentId++}`,
@@ -651,6 +664,7 @@ class WorkerMessageHandler {
             } else {
               pageInfo.document = manager.pdfDocument;
             }
+            loadedSources.push({ bytes, document: pageInfo.document });
           } else {
             pageInfo.document = null;
             warn("extractPages: invalid document.");

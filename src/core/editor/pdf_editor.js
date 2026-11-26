@@ -223,6 +223,10 @@ class PDFEditor {
   // Names of the top-level form fields already in the new document.
   #topFieldNames = new Set();
 
+  // Copies of the layers (OCG dictionaries) per source document: a document
+  // used by several entries (e.g. duplicated pages) gets one copy of each.
+  #ocgCopies = new Map();
+
   constructor({ useObjectStreams = true, title = "", author = "" } = {}) {
     [this.rootRef, this.rootDict] = this.newDict;
     [this.infoRef, this.infoDict] = this.newDict;
@@ -317,8 +321,22 @@ class PDFEditor {
         );
       }
 
+      let ocgCopies = null;
+      if (isDict(obj, "OCG")) {
+        ocgCopies = this.#ocgCopies.getOrInsertComputed(
+          this.currentDocument.document,
+          () => new RefMap()
+        );
+        const copy = ocgCopies.get(oldRef);
+        if (copy) {
+          oldRefMapping.put(oldRef, copy);
+          return copy;
+        }
+      }
+
       const newRef = this.newRef;
       oldRefMapping.put(oldRef, newRef);
+      ocgCopies?.put(oldRef, newRef);
 
       if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
         if (isDict(obj, "Page") && !this.currentDocument.pagesMap.has(oldRef)) {
