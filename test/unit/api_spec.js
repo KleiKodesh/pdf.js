@@ -8608,6 +8608,27 @@ have written that much by now. So, here’s to squashing bugs.`);
       worker.destroy();
     });
 
+    it("should refuse a page source from another worker", async function () {
+      const worker = new PDFWorker({ name: "extract-other-worker" });
+      const targetTask = getDocument({
+        ...buildGetDocumentParams("doc_1_3_pages.pdf"),
+        worker,
+      });
+      const target = await targetTask.promise;
+      const sourceTask = getDocument(
+        buildGetDocumentParams("doc_2_3_pages.pdf")
+      );
+      const source = await sourceTask.promise;
+
+      await expectAsync(
+        target.extractPages([{ document: source, includePages: [0] }])
+      ).toBeRejectedWithError(/same worker/);
+
+      await sourceTask.destroy();
+      await targetTask.destroy();
+      worker.destroy();
+    });
+
     it("should fetch document info and page using only streaming", async function () {
       const initialDataLength = 80000; // Larger than `rangeChunkSize`, since otherwise it's pretty pointless.
       const subArrays = [];

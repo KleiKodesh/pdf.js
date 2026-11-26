@@ -611,12 +611,12 @@ class WorkerMessageHandler {
           } else if (typeof pageInfo.document === "string") {
             // Another document open in this worker (see `openPdfManagers`).
             const other = openPdfManagers.get(pageInfo.document);
-            if (other) {
-              (sourceManagers ??= new Set()).add(other);
-            } else {
-              warn("extractPages: the source document is not open.");
+            if (!other) {
+              // Never fall back to this document's pages instead.
+              throw new Error("extractPages: the source document is not open.");
             }
-            pageInfo.document = other?.pdfDocument ?? null;
+            (sourceManagers ??= new Set()).add(other);
+            pageInfo.document = other.pdfDocument;
           } else if (ArrayBuffer.isView(pageInfo.document)) {
             // The same file given in several entries (e.g. pages of it used
             // twice) is loaded once, so it's one source file for the editor.
