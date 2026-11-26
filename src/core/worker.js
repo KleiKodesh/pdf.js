@@ -37,6 +37,7 @@ import { PDFWorkerStream } from "./worker_stream.js";
 import { stringToPDFString } from "./string_utils.js";
 import { StructTreeRoot } from "./struct_tree.js";
 import { writeEditedOutline } from "./edited_outline.js";
+import { PdfSidecar } from "./pdf_sidecar.js";
 
 class WorkerTask {
   #capability = createPromiseCapability();
@@ -400,6 +401,40 @@ class WorkerMessageHandler {
         userUnit,
         view,
       };
+    });
+
+    // The sidecar index (see pdf_sidecar.js): built in steps, kept in the
+    // worker for direct search; the viewer stores it and hands it back.
+    const getSidecar = () =>
+      (pdfManager.sidecar ||= new PdfSidecar(pdfManager));
+    const runSidecarTask = async (name, fn) => {
+      const task = new WorkerTask(name);
+      startWorkerTask(task);
+      try {
+        return await fn(task);
+      } finally {
+        finishWorkerTask(task);
+      }
+    };
+
+    handler.on("SidecarBuild", function (params) {
+      return runSidecarTask("SidecarBuild", task =>
+        getSidecar().build(params, handler, task)
+      );
+    });
+
+    handler.on("SidecarGet", function () {
+      return getSidecar().data;
+    });
+
+    handler.on("SidecarLoad", function ({ data }) {
+      return getSidecar().load(data);
+    });
+
+    handler.on("SidecarSearch", function (params) {
+      return runSidecarTask("SidecarSearch", task =>
+        getSidecar().search(params, handler, task)
+      );
     });
 
     handler.on("GetPageIndex", function ({ num, gen }) {

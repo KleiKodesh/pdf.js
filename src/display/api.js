@@ -868,6 +868,66 @@ class PDFDocumentProxy {
    * @returns {Promise<number>} A promise that is resolved with the page index,
    *   starting from zero, that is associated with the reference.
    */
+  /**
+   * Builds the next step of the sidecar index (content-stream map and font
+   * tables, see src/core/pdf_sidecar.js) for up to `maxPages` pages.
+   * @param {{fromPage?: number, maxPages?: number}} [params]
+   * @returns {Promise<{nextPage: number, reachedEnd: boolean,
+   *   complete: boolean}>}
+   */
+  buildSidecar({ fromPage = 0, maxPages = 50 } = {}) {
+    return this._transport.messageHandler.sendWithPromise("SidecarBuild", {
+      fromPage,
+      maxPages,
+    });
+  }
+
+  /**
+   * @returns {Promise<Object>} The sidecar data, as built so far.
+   */
+  getSidecar() {
+    return this._transport.messageHandler.sendWithPromise("SidecarGet", null);
+  }
+
+  /**
+   * Hands a stored sidecar back to the worker.
+   * @param {Object} data
+   * @returns {Promise<boolean>} false when the format version doesn't match.
+   */
+  setSidecar(data) {
+    return this._transport.messageHandler.sendWithPromise("SidecarLoad", {
+      data,
+    });
+  }
+
+  /**
+   * Batched direct search: reads only the content streams of the pages in
+   * the batch from the file and decodes them with the stored font tables.
+   * Pages not indexed yet are indexed on the way (`built`).
+   * @param {{query: string, fromPage?: number, maxPages?: number,
+   *   caseSensitive?: boolean, entireWord?: boolean,
+   *   matchDiacritics?: boolean}} params
+   * @returns {Promise<{hits: Array<{pageIndex: number, count: number}>,
+   *   nextPage: number, reachedEnd: boolean, built: Array<number>}>}
+   */
+  searchDirect({
+    query,
+    fromPage = 0,
+    maxPages = 50,
+    caseSensitive = false,
+    entireWord = false,
+    matchDiacritics = false,
+  }) {
+    return this._transport.messageHandler.sendWithPromise("SidecarSearch", {
+      query,
+      fromPage,
+      maxPages,
+      caseSensitive,
+      entireWord,
+      matchDiacritics,
+    });
+  }
+
   getPageIndex(ref) {
     return this._transport.getPageIndex(ref);
   }
