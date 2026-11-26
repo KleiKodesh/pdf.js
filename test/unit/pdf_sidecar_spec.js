@@ -64,6 +64,11 @@ describe("pdf_sidecar", function () {
     ["tracemonkey.pdf", ["trace", "the", "JavaScript", "loop", "type"]],
     ["ArabicCIDTrueType.pdf", ["م", "ال"]],
     ["basicapi.pdf", ["Trace", "the"]],
+    // Type3 fonts, vertical and mixed-length CMaps.
+    ["Type3WordSpacing.pdf", ["a", "e"]],
+    ["type3_advance.pdf", ["a", "e"]],
+    ["vertical.pdf", ["一", "a"]],
+    ["perf_text_cmap_mixed.pdf", ["a", "e"]],
   ];
 
   for (const [file, queries] of CASES) {

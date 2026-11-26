@@ -30,6 +30,8 @@ import { setVerbosityLevel } from "../src/shared/util.js";
 import { WorkerTask } from "../src/core/worker.js";
 
 setVerbosityLevel(0);
+// The built lib polyfills this; running the sources on Node needs it too.
+Math.sumPrecise ??= values => values.reduce((a, b) => a + b, 0);
 const [file, ...queries] = process.argv.slice(2);
 const handler = { send() {}, sendWithPromise: async () => null, on() {} };
 const bytes = new Uint8Array(readFileSync(file));

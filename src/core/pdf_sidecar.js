@@ -28,7 +28,7 @@
  *     v: 1, numPages,
  *     pages: [ Container | undefined ],   // index = page index
  *     forms: [ Container ],
- *     fonts: [ FontTable | null ],        // null = font failed to load
+ *     fonts: [ FontTable ],   // a font that failed to load is not mapped
  *     fontRefs: { "12R": fontIndex },     // font object -> table
  *     formRefs: [ "34R" ],                // form index -> object
  *   }
@@ -133,6 +133,20 @@ function streamEntry(xref, ref) {
 }
 
 function fontTable(font) {
+  const table = fontCodeTable(font);
+  if (table && font.isType3Font) {
+    // getTextContent's Type3 rules: char-width space threshold and the
+    // glyph-height scale use the real font matrix and bbox.
+    table.t3 = {
+      fm: Array.from(font.fontMatrix),
+      bbox: font.bbox ? Array.from(font.bbox) : null,
+      cb: !!font.isCharBBox,
+    };
+  }
+  return table;
+}
+
+function fontCodeTable(font) {
   if (!font || typeof font._charToGlyph !== "function") {
     return null;
   }
@@ -184,20 +198,34 @@ function fontTable(font) {
     };
   }
   const identity = font.toUnicode instanceof IdentityToUnicodeMap;
-  const codes = [];
+  const d = Math.round((font.defaultWidth || 0) * fm * 1000);
+  const codeSet = new Set();
   if (!identity) {
     font.toUnicode.forEach(code => {
-      codes.push(+code);
+      codeSet.add(+code);
     });
-    codes.sort((x, y) => x - y);
   }
+  // Codes without a ToUnicode entry still need their advance when it isn't
+  // the default one (getTextContent's spacing depends on it).
+  const widths = font.widths || {};
+  font.cMap.forEach((code, cid) => {
+    const w = widths[typeof cid === "number" ? cid : code];
+    if (typeof w === "number" && Math.round(w * fm * 1000) !== d) {
+      codeSet.add(+code);
+    }
+  });
+  const codes = [...codeSet].sort((x, y) => x - y);
   const u = new Array(codes.length);
   const a = new Int16Array(codes.length);
   const vis = [];
+  const vm = font.vertical ? new Int16Array(codes.length) : null;
   for (let i = 0; i < codes.length; i++) {
     const g = font._charToGlyph(codes[i]);
     u[i] = g.unicode ?? "";
     a[i] = adv(g);
+    if (vm) {
+      vm[i] = Math.round((g.vmetric?.[0] ?? 0) * fm * 1000);
+    }
     if (g.isUnicodeVisual) {
       vis.push(codes[i]);
     }
@@ -209,9 +237,13 @@ function fontTable(font) {
     k: Uint32Array.from(codes),
     u: u.join(SEP),
     a,
-    d: Math.round((font.defaultWidth || 0) * fm * 1000),
+    d,
     sp,
     v: font.vertical ? 1 : 0,
+    ...(vm && {
+      vm,
+      dv: Math.round((font.defaultVMetrics?.[0] ?? -1000) * fm * 1000),
+    }),
     ...(vis.length && { m: Uint32Array.from(vis) }),
   };
 }
@@ -287,10 +319,14 @@ class PdfSidecar {
         } catch (ex) {
           warn(`PdfSidecar: font "${name}": ${ex}`);
         }
+        if (!table) {
+          // Not mapped: a search loads this font the usual way.
+          continue;
+        }
         // Subset fonts often share one table: store each distinct table once.
-        const tableKey = table
-          ? `${table.t}|${table.u}|${table.a}|${table.r}|${table.k}|${table.d}|${table.i}`
-          : "null";
+        const tableKey = JSON.stringify(table, (k, v) =>
+          ArrayBuffer.isView(v) ? Array.from(v) : v
+        );
         let idx = this._tableIndex.get(tableKey);
         if (idx === undefined) {
           idx = this.data.fonts.length;
@@ -568,12 +604,15 @@ class TableFont {
     this.loadedName = this.name;
     this.fallbackName = "sans-serif";
     this.vertical = !!t?.v;
-    this.isType3Font = false;
-    this.fontMatrix = [0.001, 0, 0, 0.001, 0, 0];
+    this.isType3Font = !!t?.t3;
+    this.fontMatrix = t?.t3?.fm ?? [0.001, 0, 0, 0.001, 0, 0];
+    this.isCharBBox = !!t?.t3?.cb;
+    // Stored advances are in 1/1000 em; Type3 widths are in glyph space.
+    this.widthScale = t?.t3 ? 1 / (1000 * (t.t3.fm[0] || 0.001)) : 1;
     this.spaceWidth = t?.sp || 0;
     this.ascent = 0.8;
     this.descent = -0.2;
-    this.bbox = null;
+    this.bbox = t?.t3?.bbox ?? null;
     this.systemFontInfo = null;
     this.t = t;
     if (t) {
@@ -589,20 +628,24 @@ class TableFont {
   _glyph(code, isSpace) {
     const t = this.t;
     let unicode = String.fromCharCode(code),
-      width = t ? t.d : 0;
-    if (t && !t.i) {
+      width = t ? t.d : 0,
+      vy = t?.dv ?? 0;
+    if (t) {
       const j = this.map.get(code);
       if (j !== undefined) {
         unicode = this.u[j];
         width = t.a[j];
+        if (t.vm) {
+          vy = t.vm[j];
+        }
       }
     }
     return {
       unicode,
       normalizedUnicode: unicode,
-      width,
+      width: width * this.widthScale,
       isSpace,
-      vmetric: null,
+      vmetric: this.vertical ? [vy, 0, 0] : null,
       isUnicodeVisual: !!this.visual?.has(code),
       category: getCharUnicodeCategory(unicode),
     };
