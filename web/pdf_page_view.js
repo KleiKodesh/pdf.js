@@ -134,6 +134,8 @@ function lcm(a, b) {
   return (a / x) * b;
 }
 
+// How long a page stays in view before its structure tree is built (ms).
+const STRUCT_TREE_DELAY = 3000;
 class PDFPageView extends BasePDFPageView {
   #abortSignal = null;
 
@@ -524,6 +526,22 @@ class PDFPageView extends BasePDFPageView {
    * aria-owns to work.
    */
   async #renderStructTreeLayer() {
+    // The structure tree (accessibility) can be large and is often stored at
+    // the end of the file; reading it would delay the next page's image,
+    // most of all under random access. It is built once the page has stayed
+    // in view for a moment, never on the way to an image.
+    const layersId = this.#layersRenderId;
+    await new Promise(resolve => {
+      setTimeout(resolve, STRUCT_TREE_DELAY);
+    });
+    if (
+      !this.structTreeLayer ||
+      layersId !== this.#layersRenderId ||
+      this.renderingState !== RenderingStates.FINISHED ||
+      !this.#isInView()
+    ) {
+      return;
+    }
     const treeDom = await this.structTreeLayer?.render();
     if (treeDom) {
       this.l10n.pause();
@@ -535,6 +553,19 @@ class PDFPageView extends BasePDFPageView {
       this.l10n.resume();
     }
     this.structTreeLayer?.show();
+  }
+
+  /** Whether part of the page is in the window. */
+  #isInView() {
+    const { div } = this;
+    const win = div.ownerDocument?.defaultView;
+    if (!div.isConnected || !win) {
+      return false;
+    }
+    const { top, bottom, left, right } = div.getBoundingClientRect();
+    return (
+      bottom > 0 && top < win.innerHeight && right > 0 && left < win.innerWidth
+    );
   }
 
   async #buildXfaTextContentItems(textDivs) {
