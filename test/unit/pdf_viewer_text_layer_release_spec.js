@@ -37,10 +37,26 @@ describe("PDFViewer text layer release", function () {
 
     const eventBus = new EventBus();
     const abortController = new AbortController();
+    // No locale files in the unit-test server: a do-nothing l10n.
+    const l10n = {
+      getLanguage: () => "en-us",
+      getDirection: () => "ltr",
+      get: async () => "",
+      translate: async () => {},
+      translateOnce: async () => {},
+      pause() {},
+      resume() {},
+      destroy: async () => {},
+    };
     const viewer = new PDFViewer({
       container,
       eventBus,
+      l10n,
       abortSignal: abortController.signal,
+    });
+    // As in the viewer app: pages render once a scale is set.
+    eventBus.on("pagesinit", () => {
+      viewer.currentScaleValue = "page-width";
     });
     const loadingTask = getDocument(buildGetDocumentParams("tracemonkey.pdf"));
     try {
