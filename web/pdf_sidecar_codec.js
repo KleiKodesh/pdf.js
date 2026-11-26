@@ -305,6 +305,18 @@ function encodeSidecar(data) {
       refKey(body, k);
     }
   }
+  // Page byte spans: [start, length] pairs, starts delta-coded.
+  const pageBytes = data.pageBytes || [];
+  body.u(pageBytes.length);
+  for (const spans of pageBytes) {
+    body.u(spans ? spans.length / 2 + 1 : 0);
+    let last = 0;
+    for (let i = 0; spans && i < spans.length; i += 2) {
+      body.s(spans[i] - last);
+      body.u(spans[i + 1]);
+      last = spans[i] + spans[i + 1];
+    }
+  }
 
   const out = new Writer();
   out.u(MAGIC);
@@ -485,6 +497,24 @@ function decodeSidecar(buf) {
     for (let i = 0; i < nx; i++) {
       if (r.u()) {
         data.formRefs[i] = readRef(r);
+      }
+    }
+  }
+  const np = r.u();
+  if (np) {
+    data.pageBytes = [];
+    for (let i = 0; i < np; i++) {
+      const n = r.u();
+      if (n) {
+        const spans = [];
+        let last = 0;
+        for (let k = 1; k < n; k++) {
+          const start = last + r.s();
+          const length = r.u();
+          spans.push(start, length);
+          last = start + length;
+        }
+        data.pageBytes[i] = spans;
       }
     }
   }

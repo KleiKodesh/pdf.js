@@ -22,8 +22,8 @@ import {
   countMatches,
   normalizeText,
 } from "../src/core/sidecar_find.js";
+import { decodeSidecar, encodeSidecar } from "../web/pdf_sidecar_codec.js";
 import { deflateRawSync, gzipSync } from "node:zlib";
-import { encodeSidecar } from "../web/pdf_sidecar_codec.js";
 import { LocalPdfManager } from "../src/core/pdf_manager.js";
 import { PdfSidecar } from "../src/core/pdf_sidecar.js";
 import { readFileSync } from "node:fs";
@@ -31,7 +31,7 @@ import { serialize } from "node:v8";
 import { setVerbosityLevel } from "../src/shared/util.js";
 import { WorkerTask } from "../src/core/worker.js";
 
-setVerbosityLevel(0);
+setVerbosityLevel(+(process.env.VERB ?? 0));
 // The built lib polyfills this; running the sources on Node needs it too.
 Math.sumPrecise ??= values => values.reduce((a, b) => a + b, 0);
 const [file, ...queries] = process.argv.slice(2);
@@ -72,6 +72,30 @@ console.log(
     `sidecarBytes=${data.length} fonts=${sidecar.data.fonts.length} ` +
     `storedJsonGzip=${gzipSync(json).length} storedBinDeflateRaw=${packed.length}`
 );
+// Page byte map: what random access fetches per page; must survive the codec.
+{
+  const pb = sidecar.data.pageBytes || [];
+  const per = [];
+  for (let i = 0; i < numPages; i++) {
+    const spans = pb[i] || [];
+    let total = 0;
+    for (let k = 1; k < spans.length; k += 2) {
+      total += spans[k];
+    }
+    per.push([total, spans.length / 2]);
+  }
+  const sorted = per.map(x => x[0]).sort((a, b) => a - b);
+  const back = decodeSidecar(encodeSidecar(sidecar.data)).pageBytes || [];
+  const same = JSON.stringify(back) === JSON.stringify(pb);
+  console.log(
+    `PAGEBYTES pages=${pb.filter(Boolean).length}/${numPages} ` +
+      `medianBytes=${sorted[sorted.length >> 1]} maxBytes=${sorted.at(-1)} ` +
+      `maxSpans=${Math.max(...per.map(x => x[1]))} codecRoundTrip=${same ? "OK" : "MISMATCH"}`
+  );
+  if (!same) {
+    process.exitCode = 1;
+  }
+}
 
 // PDFFindController's first search: getTextContent of every page (fresh doc).
 pm = await open();

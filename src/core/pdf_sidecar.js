@@ -31,6 +31,10 @@
  *     fonts: [ FontTable ],   // a font that failed to load is not mapped
  *     fontRefs: { "12R": fontIndex },     // font object -> table
  *     formRefs: [ "34R" ],                // form index -> object
+ *     pageBytes: [ [start, length, ...] | undefined ],  // index = page:
+ *        every byte span of the file the page needs (page object, content,
+ *        resources incl. images, fonts and font programs, annotations),
+ *        merged; for random access fetching a page's bytes at once
  *   }
  *   Container = {
  *     c: [ [num, gen, start, length, filters] ],  // the content streams:
@@ -59,7 +63,29 @@ import { IdentityToUnicodeMap } from "./to_unicode_map.js";
 import { Stream } from "./stream.js";
 import { warn } from "../shared/util.js";
 
-const SIDECAR_VERSION = 1;
+const SIDECAR_VERSION = 2;
+
+// Keys not followed when collecting a page's objects: links to other pages
+// and to the document structure.
+const SKIP_KEYS = new Set([
+  "Parent",
+  "P",
+  "Dest",
+  "D",
+  "A",
+  "PA",
+  "Next",
+  "Prev",
+  "First",
+  "Last",
+  "StructParent",
+  "StructParents",
+  "B",
+  "Popup",
+  "IRT",
+]);
+// Byte spans closer than this are merged into one.
+const SPAN_GAP = 4096;
 const SEP = "\uFFFF";
 
 function plainParams(parms) {
@@ -406,7 +432,100 @@ class PdfSidecar {
     }
     const entry = await this._container(refs, page.resources, evaluator, task);
     this.data.pages[pageIndex] = entry;
+    try {
+      (this.data.pageBytes ||= [])[pageIndex] = this._pageBytes(page.ref);
+    } catch (ex) {
+      warn(`PdfSidecar: page ${pageIndex + 1} bytes: ${ex}`);
+    }
     return entry;
+  }
+
+  /** Object number -> [start, end) of its bytes in the file. */
+  _objectSpans() {
+    if (this._spans) {
+      return this._spans;
+    }
+    const xref = this.xref;
+    const starts = [];
+    const n = xref.trailer?.get("Size") || 0;
+    for (let i = 0; i < n; i++) {
+      const e = xref.getEntry(i);
+      if (e?.uncompressed && e.offset > 0) {
+        starts.push(e.offset);
+      }
+    }
+    starts.sort((a, b) => a - b);
+    const length = xref.stream.length ?? xref.stream.end;
+    const end = offset => {
+      let lo = 0,
+        hi = starts.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (starts[mid] <= offset) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      return lo < starts.length ? starts[lo] : length;
+    };
+    this._spans = num => {
+      let e = xref.getEntry(num);
+      if (e && !e.uncompressed) {
+        e = xref.getEntry(e.offset); // in an object stream: that stream
+      }
+      return e?.uncompressed && e.offset > 0 ? [e.offset, end(e.offset)] : null;
+    };
+    return this._spans;
+  }
+
+  /** The merged byte spans of every object reachable from a page. */
+  _pageBytes(pageRef) {
+    const xref = this.xref;
+    const spanOf = this._objectSpans();
+    const spans = [];
+    const seen = new Set();
+    const todo = [pageRef];
+    while (todo.length) {
+      const v = todo.pop();
+      if (v instanceof Ref) {
+        const key = v.toString();
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        const span = spanOf(v.num);
+        if (span) {
+          spans.push(span);
+        }
+        let obj;
+        try {
+          obj = xref.fetch(v);
+        } catch {
+          continue;
+        }
+        todo.push(obj instanceof BaseStream ? obj.dict : obj);
+      } else if (v instanceof Dict) {
+        for (const key of v.getKeys()) {
+          if (!SKIP_KEYS.has(key)) {
+            todo.push(v.getRaw(key));
+          }
+        }
+      } else if (Array.isArray(v)) {
+        todo.push(...v);
+      }
+    }
+    spans.sort((a, b) => a[0] - b[0]);
+    const out = [];
+    let cur = null;
+    for (const [a, b] of spans) {
+      if (cur && a <= cur[1] + SPAN_GAP) {
+        cur[1] = Math.max(cur[1], b);
+      } else {
+        out.push((cur = [a, b]));
+      }
+    }
+    return out.flatMap(([a, b]) => [a, b - a]);
   }
 
   /** Builds up to `maxPages` missing pages from `fromPage`. */
