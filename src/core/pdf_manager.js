@@ -26,6 +26,7 @@ import {
 } from "./core_utils.js";
 import { ChunkedStreamManager } from "./chunked_stream.js";
 import { ImageResizer } from "./image_resizer.js";
+import { MathClamp } from "../shared/math_clamp.js";
 import { PDFDocument } from "./document.js";
 import { Stream } from "./stream.js";
 
@@ -44,6 +45,8 @@ function parseDocBaseUrl(url) {
   return null;
 }
 
+// The most bytes one read-ahead (see NetworkPdfManager.ensure) asks for.
+const READ_AHEAD_MAX = 4 << 20;
 class BasePdfManager {
   constructor({
     // source,
@@ -196,6 +199,14 @@ class NetworkPdfManager extends BasePdfManager {
     this.pdfDocument = new PDFDocument(this, this.streamManager.getStream());
   }
 
+  // Read-ahead for walks that miss data in file order (a structure tree, an
+  // object stream read part by part): each miss right after the previous one
+  // doubles the bytes read with it, so a long walk costs a few reads instead
+  // of one read plus one re-parse per part. Random misses read only the part.
+  #lastMissEnd = -1;
+
+  #readAhead = 0;
+
   async ensure(obj, prop, args) {
     try {
       const value = obj[prop];
@@ -204,7 +215,16 @@ class NetworkPdfManager extends BasePdfManager {
       if (!(ex instanceof MissingDataException)) {
         throw ex;
       }
-      await this.requestRange(ex.begin, ex.end);
+      const { chunkSize } = this.streamManager;
+      const sequential =
+        ex.begin >= this.#lastMissEnd - chunkSize &&
+        ex.begin <= this.#lastMissEnd + chunkSize;
+      this.#readAhead = sequential
+        ? MathClamp(this.#readAhead * 2, chunkSize, READ_AHEAD_MAX)
+        : 0;
+      const end = Math.max(ex.end, ex.begin + this.#readAhead);
+      this.#lastMissEnd = end;
+      await this.requestRange(ex.begin, end);
       return this.ensure(obj, prop, args);
     }
   }

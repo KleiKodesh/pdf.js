@@ -335,6 +335,8 @@ function adapterController(loaded) {
   c.textIndex = loaded;
   c.setDocument({
     numPages,
+    // As a random-access document: several pages extracted at once.
+    loadingParams: { disableAutoFetch: true },
     getPage: async n => ({
       getTextContent: async () => {
         extracted++;

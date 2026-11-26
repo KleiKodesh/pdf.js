@@ -796,6 +796,8 @@ const PDFViewerApplication = {
       abortSignal,
       supportsPinchToZoom: this.supportsPinchToZoom,
       enableAutoLinking: AppOptions.get("enableAutoLinking"),
+      // The full viewer keeps the accessibility structure tree.
+      enableStructTree: true,
       minDurationToUpdateCanvas: AppOptions.get("minDurationToUpdateCanvas"),
     }));
 

@@ -111,6 +111,12 @@ import { XfaLayerBuilder } from "./xfa_layer_builder.js";
  *   the necessary layer-properties.
  * @property {boolean} [enableAutoLinking] - Enable creation of hyperlinks from
  *   text that look like URLs. The default value is `true`.
+ * @property {boolean} [enableStructTree] - Read the document's structure tree
+ *   (tagged-PDF accessibility: headings, paragraphs, reading order) for each
+ *   rendered page. The default value is `false`: showing pages, selecting
+ *   text and search don't need it, and it can be large and stored far from
+ *   the page's own data (under random access it held up the next page).
+ *   A feature that needs it should read it lazily, when that feature is used.
  * @property {CommentManager} [commentManager] - The comment manager instance.
  *   to.
  * @property {AbortSignal} [abortSignal]
@@ -144,6 +150,8 @@ class PDFPageView extends BasePDFPageView {
   #commentManager = null;
 
   #enableAutoLinking = true;
+
+  #enableStructTree = false;
 
   #layersRenderId = 0;
 
@@ -212,6 +220,7 @@ class PDFPageView extends BasePDFPageView {
     this.capCanvasAreaFactor =
       options.capCanvasAreaFactor ?? AppOptions.get("capCanvasAreaFactor");
     this.#enableAutoLinking = options.enableAutoLinking !== false;
+    this.#enableStructTree = options.enableStructTree === true;
     this.#newTextLayerMode = options.newTextLayerMode ?? 0;
     this.#commentManager = options.commentManager || null;
 
@@ -1027,10 +1036,15 @@ class PDFPageView extends BasePDFPageView {
       return;
     }
     const { l10n, pdfPage, viewport } = this;
-    this.structTreeLayer ||= new StructTreeLayerBuilder(
-      pdfPage,
-      viewport.rawDims
-    );
+    // The structure tree is not read unless asked for (enableStructTree):
+    // we don't use it; a feature that ever needs it should read it lazily,
+    // only when that feature is used.
+    if (this.#enableStructTree) {
+      this.structTreeLayer ||= new StructTreeLayerBuilder(
+        pdfPage,
+        viewport.rawDims
+      );
+    }
 
     const textLayerPromise = this.textLayer ? this.#renderTextLayer() : null;
 

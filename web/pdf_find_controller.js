@@ -418,6 +418,8 @@ function getOriginalIndex(diffs, pos, len) {
 // How many items back a copy of the same text drawn at the same place is
 // looked for, and how close (as a fraction of the font size) it must be.
 const DRAWN_COPY_LOOKBACK = 16;
+// Pages whose text is read at once under random access (#queueExtractText).
+const RANDOM_ACCESS_TEXT_LANES = 6;
 // How many pages' text content is kept for getPageTextContent.
 const TEXT_CONTENTS_KEPT = 64;
 const DRAWN_COPY_TOLERANCE = 0.15;
@@ -482,7 +484,12 @@ class PDFFindController {
   // Per page index: true once its text was extracted (or failed for good).
   #textExtracted = [];
 
-  #textQueue = null;
+  // Text extraction lanes: one (in page order) when the whole file is at
+  // hand; under random access (no auto-fetch) several pages are read at once,
+  // so a page waiting for its bytes doesn't hold up the next ones.
+  #textLanes = [];
+
+  #nextLane = 0;
 
   // Exact per-page counts from the text index for the current search (all
   // pages indexed), so the total shows before the pages are read.
@@ -677,6 +684,8 @@ class PDFFindController {
     this._hasDiacritics = [];
     this.#textGeneration++;
     this.#textExtracted = [];
+    this.#textLanes = [];
+    this.#nextLane = 0;
     this._matchesCountTotal = 0;
     this._pagesToSearch = null;
     this._pendingFindMatches = new Set();
@@ -967,7 +976,6 @@ class PDFFindController {
     // nothing: all pages are read as without one.
     if (this.#indexInUse) {
       // Extracted lazily, page by page, see #ensureExtractText.
-      this.#textQueue ||= Promise.resolve();
       return;
     }
     if (this._extractTextPromises.length > 0) {
@@ -978,7 +986,8 @@ class PDFFindController {
       return;
     }
     this.#textExtracted = [];
-    this.#textQueue = Promise.resolve();
+    this.#textLanes = [];
+    this.#nextLane = 0;
     for (let i = 0, ii = this._linkService.pagesCount; i < ii; i++) {
       this.#queueExtractText(i);
     }
@@ -986,7 +995,6 @@ class PDFFindController {
 
   #ensureExtractText(i) {
     if (!this._extractTextPromises[i]) {
-      this.#textQueue ||= Promise.resolve();
       this.#queueExtractText(i);
     }
     return this._extractTextPromises[i];
@@ -1101,7 +1109,16 @@ class PDFFindController {
     const isStale = () =>
       pdfDoc !== this._pdfDocument || generation !== this.#textGeneration;
 
-    this.#textQueue = this.#textQueue.then(async () => {
+    const laneCount = pdfDoc?.loadingParams?.disableAutoFetch
+      ? RANDOM_ACCESS_TEXT_LANES
+      : 1;
+    const lane = this.#nextLane++ % laneCount;
+    // The first page queued is read alone (its result shows first), then the
+    // other lanes start.
+    const start = this.#textLanes.length
+      ? this.#textLanes[0]
+      : Promise.resolve();
+    this.#textLanes[lane] = (this.#textLanes[lane] || start).then(async () => {
       if (isStale()) {
         resolve();
         return;
@@ -1162,7 +1179,8 @@ class PDFFindController {
    */
   #requeueMissingText() {
     this.#textGeneration++;
-    this.#textQueue = Promise.resolve();
+    this.#textLanes = [];
+    this.#nextLane = 0;
     for (let i = 0, ii = this._extractTextPromises.length; i < ii; i++) {
       if (this.#textExtracted[i] !== true) {
         this.#queueExtractText(i);

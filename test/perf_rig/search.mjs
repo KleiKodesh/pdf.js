@@ -20,9 +20,9 @@
 import puppeteer from "puppeteer";
 
 const [book, rounds, query, query2] = process.argv.slice(2);
-const res = { on: [], off: [] };
+const res = { on: [], off: [], full: [] };
 
-async function runOnce(index) {
+async function runOnce(index, full = false) {
   const browser = await puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROME || undefined,
@@ -52,6 +52,7 @@ async function runOnce(index) {
     const r = await page.evaluate(o => searchRun(o), {
       book,
       index,
+      full,
       query,
       query2,
     });
@@ -64,9 +65,10 @@ async function runOnce(index) {
 }
 
 for (let i = 0; i < +rounds; i++) {
-  for (const mode of i % 2 ? ["off", "on"] : ["on", "off"]) {
+  const order = process.env.FULL ? ["on", "off", "full"] : ["on", "off"];
+  for (const mode of i % 2 ? order.reverse() : order) {
     try {
-      res[mode].push(await runOnce(mode === "on"));
+      res[mode].push(await runOnce(mode === "on", mode === "full"));
     } catch (e) {
       console.log("FAIL", mode, String(e).slice(0, 300));
     }
@@ -90,7 +92,7 @@ const keys = [
   "secondIndexMs",
   "secondBytes",
 ];
-for (const mode of ["on", "off"]) {
+for (const mode of Object.keys(res).filter(m => res[m].length)) {
   console.log(
     `SEARCH ${book} index=${mode} n=${res[mode].length} ` +
       keys
