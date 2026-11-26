@@ -1,0 +1,53 @@
+name: KleiKodesh pdfjs-dist build
+# Builds the `pdfjs-dist` package from this fork (gulp dist) and publishes it as a
+# GitHub release asset, pdfjs-dist.tgz. The app (KleiKodesh/KleiKodeshProject,
+# vue-frontend/package.json) depends on that tarball URL, so `npm ci` needs no gulp.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions: {}
+
+concurrency:
+  group: kh-dist-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build pdfjs-dist
+        run: npx gulp dist
+      - name: Pack
+        id: pack
+        run: |
+          VERSION=$(node -p "require('./build/dist/package.json').version")
+          SHORT=$(git rev-parse --short=9 HEAD)
+          npm pack ./build/dist
+          mv pdfjs-dist-*.tgz pdfjs-dist.tgz
+          echo "tag=kh-dist-$VERSION-$SHORT" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION  commit: $SHORT"
+          ls -l pdfjs-dist.tgz
+          sha512sum pdfjs-dist.tgz
+          tar -tzf pdfjs-dist.tgz | grep -E "build/pdf(\.worker|\.sandbox)?\.min\.mjs|web/pdf_viewer\.(mjs|css)$"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pack.outputs.tag }}
+        run: |
+          gh release create "$TAG" pdfjs-dist.tgz --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "$TAG" \
+            --notes "pdfjs-dist built from $GITHUB_SHA (gulp dist)."
+          echo "Asset: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/pdfjs-dist.tgz"

@@ -510,6 +510,7 @@ async function incrementalUpdate({
   acroForm = null,
   xfaData = null,
   useXrefStream = false,
+  sectionOnly = false,
 }) {
   await updateAcroform({
     xref,
@@ -552,20 +553,23 @@ async function incrementalUpdate({
     ? getXRefStreamTable(xrefInfo, baseOffset, newRefs, newXref, buffer)
     : getXRefTable(xrefInfo, baseOffset, newRefs, newXref, buffer));
 
+  const keptLength = sectionOnly ? 0 : originalData.length;
   const totalLength =
-    originalData.length + Math.sumPrecise(buffer.map(str => str.length));
+    keptLength + Math.sumPrecise(buffer.map(str => str.length));
   const array = new Uint8Array(totalLength);
 
   // Original data
-  array.set(originalData);
-  let offset = originalData.length;
+  if (!sectionOnly) {
+    array.set(originalData);
+  }
+  let offset = keptLength;
 
   // New data
   for (const str of buffer) {
     offset = writeString(str, offset, array);
   }
 
-  return array;
+  return sectionOnly ? { data: array, start: originalData.length } : array;
 }
 
 export {

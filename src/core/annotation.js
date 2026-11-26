@@ -498,6 +498,13 @@ class AnnotationFactory {
             StampAnnotation.createNewAnnotation(xref, annotation, changes, {})
           );
           break;
+        case AnnotationType.TEXT:
+          // A sticky note (no editor in the viewer): a new one, or an
+          // existing one (`id`) with new contents.
+          promises.push(
+            TextAnnotation.createNewAnnotation(xref, annotation, changes, {})
+          );
+          break;
         default:
           // A comment added to, or edited on, an existing annotation that has
           // no editor (square, text, underline, ...): keep its dictionary and
@@ -4409,6 +4416,37 @@ class TextAnnotation extends MarkupAnnotation {
       this.data.state = null;
       this.data.stateModel = null;
     }
+  }
+
+  /**
+   * A sticky note saved from serialized data `{ annotationType:
+   * AnnotationType.TEXT, pageIndex, rect, contents, color?, date? }`; with an
+   * `id` the existing note keeps its dictionary and gets the new contents.
+   */
+  static createNewDict(annotation, xref, _params) {
+    const { color, contents, date, oldAnnotation, rect, user } = annotation;
+    const note = oldAnnotation || new Dict(xref);
+    note.setIfNotExists("Type", Name.get("Annot"));
+    note.setIfNotExists("Subtype", Name.get("Text"));
+    const modified = `D:${getModificationDate(date)}`;
+    note.set("M", modified);
+    note.setIfNotExists("CreationDate", modified);
+    note.setIfArray("Rect", rect);
+    note.setIfNotExists("Name", Name.get("Comment"));
+    note.setIfNotExists("F", 28);
+    note.setIfNotExists("Open", false);
+    note.setIfArray("C", getPdfColorArray(color));
+    note.setIfDefined("T", stringToAsciiOrUTF16BE(user));
+    if (typeof contents === "string") {
+      // Rich text would be shown instead of /Contents.
+      note.delete("RC");
+      note.set("Contents", stringToAsciiOrUTF16BE(contents));
+    }
+    return note;
+  }
+
+  static async createNewAppearanceStream(annotation, xref, params) {
+    return null;
   }
 }
 

@@ -873,6 +873,7 @@ class WorkerMessageHandler {
         intent,
         outline,
         mergeIntoLastUpdate,
+        sectionOnly,
       }
     ) {
       if (isPureXfa) {
@@ -894,6 +895,15 @@ class WorkerMessageHandler {
         : null;
       const [stream, acroForm, acroFormRef, startXRef, xref, _structTreeRoot] =
         await Promise.all(globalPromises);
+      // Nothing changed: the file as it is (`sectionOnly`: nothing to write).
+      const unchanged = () =>
+        sectionOnly
+          ? {
+              data: new Uint8Array(0),
+              start: stream.bytes.length,
+              length: stream.bytes.length,
+            }
+          : stream.bytes;
 
       if (
         (typeof PDFJSDev === "undefined" ||
@@ -1022,10 +1032,10 @@ class WorkerMessageHandler {
       if (isPureXfa) {
         xfaData = refs[0];
         if (!xfaData) {
-          return stream.bytes;
+          return unchanged();
         }
       } else if (changes.size === 0) {
-        return stream.bytes;
+        return unchanged();
       }
 
       const { incrementalUpdate } = await import(
@@ -1127,9 +1137,14 @@ class WorkerMessageHandler {
         xfaData,
         // Preserve the XRef table/stream format.
         useXrefStream: isDict(xref.topDict, "XRef"),
-      }).finally(() => {
-        xref.resetNewTemporaryRef();
-      });
+        sectionOnly,
+      })
+        .then(result =>
+          sectionOnly ? { ...result, length: stream.bytes.length } : result
+        )
+        .finally(() => {
+          xref.resetNewTemporaryRef();
+        });
     }
 
     handler.on("SaveDocument", data => saveDocument(pdfManager, data));
