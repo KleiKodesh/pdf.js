@@ -124,6 +124,16 @@ const LAYERS_ORDER = new Map([
   ["xfaLayer", 3],
 ]);
 
+/** Least common multiple of two natural numbers. */
+function lcm(a, b) {
+  let x = a,
+    y = b;
+  while (y) {
+    [x, y] = [y, x % y];
+  }
+  return (a / x) * b;
+}
+
 class PDFPageView extends BasePDFPageView {
   #abortSignal = null;
 
@@ -152,6 +162,10 @@ class PDFPageView extends BasePDFPageView {
   #sfx = [1, 1];
 
   #sfy = [1, 1];
+
+  #roundX = 1;
+
+  #roundY = 1;
 
   #textLayerMode = TextLayerMode.ENABLE;
 
@@ -826,19 +840,28 @@ class PDFPageView extends BasePDFPageView {
 
     const sfx = approximateFraction(outputScale.sx),
       sfy = approximateFraction(outputScale.sy);
-    if (this.#sfx[1] !== sfx[1]) {
-      if (sfx[1] !== 1) {
-        div.style.setProperty("--scale-round-x", `${sfx[1]}px`);
+    // The page's CSS size is rounded to whole canvas pixels (sfx) and, when
+    // the canvas is restricted (drawn below the screen's resolution), also to
+    // whole device pixels: the detail view's canvas is then placed and sized
+    // 1:1 on the screen (see snapDetailSpan).
+    const [, screenRound] = approximateFraction(OutputScale.pixelRatio);
+    const roundX = lcm(sfx[1], screenRound),
+      roundY = lcm(sfy[1], screenRound);
+    if (this.#roundX !== roundX) {
+      if (roundX !== 1) {
+        div.style.setProperty("--scale-round-x", `${roundX}px`);
       } else {
         div.style.removeProperty("--scale-round-x");
       }
+      this.#roundX = roundX;
     }
-    if (this.#sfy[1] !== sfy[1]) {
-      if (sfy[1] !== 1) {
-        div.style.setProperty("--scale-round-y", `${sfy[1]}px`);
+    if (this.#roundY !== roundY) {
+      if (roundY !== 1) {
+        div.style.setProperty("--scale-round-y", `${roundY}px`);
       } else {
         div.style.removeProperty("--scale-round-y");
       }
+      this.#roundY = roundY;
     }
     this.#sfx = sfx;
     this.#sfy = sfy;
