@@ -211,22 +211,39 @@ function fontCodeTable(font) {
       codeSet.add(+code);
     }
   });
-  const codes = [...codeSet].sort((x, y) => x - y);
-  const u = new Array(codes.length);
-  const a = new Int16Array(codes.length);
-  const vis = [];
-  const vm = font.vertical ? new Int16Array(codes.length) : null;
-  for (let i = 0; i < codes.length; i++) {
-    const g = font._charToGlyph(codes[i]);
-    u[i] = g.unicode ?? "";
-    a[i] = adv(g);
-    if (vm) {
-      vm[i] = Math.round((g.vmetric?.[0] ?? 0) * fm * 1000);
-    }
-    if (g.isUnicodeVisual) {
-      vis.push(codes[i]);
+  // Keep only the codes that decode differently from the fallback (the code
+  // as a char, default advances): e.g. pdf.js gives Identity fonts a full
+  // 65536-entry ToUnicode, nearly all of it equal to the fallback.
+  const dv = font.vertical
+    ? Math.round((font.defaultVMetrics?.[0] ?? -1000) * fm * 1000)
+    : 0;
+  const codes = [],
+    u = [],
+    aa = [],
+    vms = [],
+    vis = [];
+  for (const code of [...codeSet].sort((x, y) => x - y)) {
+    const g = font._charToGlyph(code);
+    const text = g.unicode ?? "";
+    const w = adv(g);
+    const v = font.vertical ? Math.round((g.vmetric?.[0] ?? 0) * fm * 1000) : 0;
+    if (
+      text !== String.fromCharCode(code) ||
+      w !== d ||
+      v !== dv ||
+      g.isUnicodeVisual
+    ) {
+      codes.push(code);
+      u.push(text);
+      aa.push(w);
+      vms.push(v);
+      if (g.isUnicodeVisual) {
+        vis.push(code);
+      }
     }
   }
+  const a = Int16Array.from(aa);
+  const vm = font.vertical ? Int16Array.from(vms) : null;
   return {
     t: 1,
     r: font.cMap.codespaceRanges.map(x => x.slice()),
@@ -239,7 +256,7 @@ function fontCodeTable(font) {
     v: font.vertical ? 1 : 0,
     ...(vm && {
       vm,
-      dv: Math.round((font.defaultVMetrics?.[0] ?? -1000) * fm * 1000),
+      dv,
     }),
     ...(vis.length && { m: Uint32Array.from(vis) }),
   };
