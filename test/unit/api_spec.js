@@ -10637,6 +10637,7 @@ small scripts as well as for`);
 
         pdfPage = await pdfDoc.getPage(2);
         structTree = await pdfPage.getStructTree();
+        const [linkAnnotation] = await pdfPage.getAnnotations();
 
         expect(structTree).toEqual({
           children: [
@@ -10656,7 +10657,15 @@ small scripts as well as for`);
                       children: [
                         {
                           role: "Reference",
-                          children: [{ type: "content", id: "p23R_mc2" }],
+                          // The link is kept in this copy, so its annotation
+                          // stays in the structure tree.
+                          children: [
+                            { type: "content", id: "p23R_mc2" },
+                            {
+                              type: "annotation",
+                              id: `pdfjs_internal_id_${linkAnnotation.id}`,
+                            },
+                          ],
                           lang: "EN-US",
                         },
                         { type: "content", id: "p23R_mc3" },
@@ -11367,13 +11376,13 @@ small scripts as well as for`);
         const { info, metadata } = await pdfDoc.getMetadata();
         expect(info.Language).toEqual("he-IL");
         expect(metadata.get("dc:title")).toEqual("Kept");
-        expect(await pdfDoc.getMarkInfo()).toEqual(
-          jasmine.objectContaining({ Marked: true })
+        expect((await pdfDoc.getMarkInfo()).get("Marked")).toBeTrue();
+        expect(await pdfDoc.getViewerPreferences()).toEqual(
+          new Map([
+            ["Direction", "R2L"],
+            ["DisplayDocTitle", true],
+          ])
         );
-        expect(await pdfDoc.getViewerPreferences()).toEqual({
-          Direction: "R2L",
-          DisplayDocTitle: true,
-        });
         await loadingTask.destroy();
 
         // Without a structure tree left, /MarkInfo goes; the rest stays.
@@ -11386,10 +11395,12 @@ small scripts as well as for`);
         loadingTask = getDocument({ data });
         pdfDoc = await loadingTask.promise;
         expect(await pdfDoc.getMarkInfo()).toBeNull();
-        expect(await pdfDoc.getViewerPreferences()).toEqual({
-          Direction: "R2L",
-          DisplayDocTitle: true,
-        });
+        expect(await pdfDoc.getViewerPreferences()).toEqual(
+          new Map([
+            ["Direction", "R2L"],
+            ["DisplayDocTitle", true],
+          ])
+        );
         expect((await pdfDoc.getMetadata()).metadata.get("dc:title")).toEqual(
           "Kept"
         );
@@ -11469,7 +11480,7 @@ small scripts as well as for`);
         expect(link.role).toEqual("Link");
         expect(link.children[0]).toEqual({
           type: "annotation",
-          id: annotation.id,
+          id: `pdfjs_internal_id_${annotation.id}`,
         });
         await loadingTask.destroy();
       });
