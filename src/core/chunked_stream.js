@@ -388,19 +388,15 @@ class ChunkedStreamManager {
   }
 
   requestRanges(ranges = []) {
-    const chunksToRequest = [];
+    const chunks = new Set();
     for (const range of ranges) {
       const beginChunk = this.getBeginChunk(range.begin);
       const endChunk = this.getEndChunk(range.end);
       for (let chunk = beginChunk; chunk < endChunk; ++chunk) {
-        if (!chunksToRequest.includes(chunk)) {
-          chunksToRequest.push(chunk);
-        }
+        chunks.add(chunk);
       }
     }
-
-    chunksToRequest.sort((a, b) => a - b);
-    return this.#requestChunks(chunksToRequest);
+    return this.#requestChunks([...chunks].sort((a, b) => a - b));
   }
 
   /**

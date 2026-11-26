@@ -386,6 +386,7 @@ class WorkerMessageHandler {
     }
 
     handler.on("GetPage", async function ({ pageIndex }) {
+      await prefetchPageBytes(pageIndex);
       const page = await pdfManager.getPage(pageIndex);
 
       const [rotate, ref, userUnit, view] = await Promise.all([
@@ -429,6 +430,28 @@ class WorkerMessageHandler {
 
     handler.on("SidecarLoad", function ({ data }) {
       return getSidecar().load(data);
+    });
+
+    // Random access: with the sidecar's page byte map, a page's whole byte
+    // set is requested at once (grouped into as few reads as possible) before
+    // its objects are parsed, instead of one missing object at a time.
+    const prefetchPageBytes = pageIndex => {
+      const spans = pdfManager.sidecar?.data.pageBytes?.[pageIndex];
+      const manager = pdfManager.streamManager;
+      if (!spans || !manager || manager.getStream().isDataLoaded) {
+        return Promise.resolve();
+      }
+      const ranges = [];
+      for (let i = 0; i + 1 < spans.length; i += 2) {
+        ranges.push({ begin: spans[i], end: spans[i] + spans[i + 1] });
+      }
+      return manager.requestRanges(ranges).catch(() => {});
+    };
+
+    handler.on("PrefetchPages", function ({ pageIndexes }) {
+      for (const pageIndex of pageIndexes) {
+        prefetchPageBytes(pageIndex);
+      }
     });
 
     handler.on("SidecarSearch", function (params) {
@@ -1224,37 +1247,39 @@ class WorkerMessageHandler {
         },
         sink
       ) {
-        pdfManager.getPage(pageId).then(function (page) {
-          const task = new WorkerTask(`GetOperatorList: page ${pageIndex}`);
-          startWorkerTask(task);
+        prefetchPageBytes(pageIndex)
+          .then(() => pdfManager.getPage(pageId))
+          .then(function (page) {
+            const task = new WorkerTask(`GetOperatorList: page ${pageIndex}`);
+            startWorkerTask(task);
 
-          page
-            .getOperatorList({
-              handler,
-              sink,
-              task,
-              intent,
-              cacheKey,
-              annotationStorage,
-              modifiedIds,
-              pageIndex,
-              pageProxyId,
-            })
-            .then(
-              () => {
-                sink.close();
-              },
-              reason => {
-                if (task.terminated) {
-                  return; // ignoring errors from the terminated thread
+            page
+              .getOperatorList({
+                handler,
+                sink,
+                task,
+                intent,
+                cacheKey,
+                annotationStorage,
+                modifiedIds,
+                pageIndex,
+                pageProxyId,
+              })
+              .then(
+                () => {
+                  sink.close();
+                },
+                reason => {
+                  if (task.terminated) {
+                    return; // ignoring errors from the terminated thread
+                  }
+                  sink.error(reason);
                 }
-                sink.error(reason);
-              }
-            )
-            .finally(() => {
-              finishWorkerTask(task);
-            });
-        });
+              )
+              .finally(() => {
+                finishWorkerTask(task);
+              });
+          });
       }
     );
 

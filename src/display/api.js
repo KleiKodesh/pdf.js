@@ -890,6 +890,16 @@ class PDFDocumentProxy {
   }
 
   /**
+   * Random access: requests the whole byte set of these pages (from the
+   * sidecar's page byte map) ahead of rendering them. Does nothing without a
+   * sidecar or when the file is fully loaded.
+   * @param {Array<number>} pageIndexes - zero-based.
+   */
+  prefetchPages(pageIndexes) {
+    this._transport.messageHandler.send("PrefetchPages", { pageIndexes });
+  }
+
+  /**
    * Hands a stored sidecar back to the worker.
    * @param {object} data
    * @returns {Promise<boolean>} false when the format version doesn't match.
