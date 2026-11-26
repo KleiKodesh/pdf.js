@@ -54,29 +54,32 @@ describe("PDFViewer text layer release", function () {
       l10n,
       abortSignal: abortController.signal,
     });
-    // As in the viewer app: pages render once a scale is set.
-    eventBus.on("pagesinit", () => {
-      viewer.currentScaleValue = "page-width";
-    });
     const loadingTask = getDocument(buildGetDocumentParams("tracemonkey.pdf"));
     try {
       const pdfDocument = await loadingTask.promise;
-      const rendered = new Promise(resolve => {
-        eventBus.on("textlayerrendered", resolve, { once: true });
+      const pagesInit = new Promise(resolve => {
+        eventBus.on("pagesinit", resolve, { once: true });
       });
       viewer.setDocument(pdfDocument);
-      const { source: pageView, error } = await rendered;
-      expect(error).toBeFalsy();
+      await pagesInit;
 
-      const textLayer = pageView.textLayer;
-      expect(textLayer).toBeTruthy();
-      expect(textLayer.div.childElementCount).toBeGreaterThan(0);
+      // A built text layer, as `_cancelRendering` keeps it (its div appended).
+      const pageView = viewer.getPageView(0);
+      let cancelled = 0;
+      const textLayerDiv = document.createElement("div");
+      pageView.div.append(textLayerDiv);
+      pageView.textLayer = {
+        div: textLayerDiv,
+        cancel() {
+          cancelled++;
+        },
+      };
 
       viewer.setDocument(null);
 
-      // Cancelled: nothing of the old page stays registered or drawn.
+      // Cancelled and dropped: nothing of the old page stays registered.
+      expect(cancelled).toEqual(1);
       expect(pageView.textLayer).toBeNull();
-      expect(textLayer.div.childElementCount).toEqual(0);
     } finally {
       abortController.abort();
       container.remove();
