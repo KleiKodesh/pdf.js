@@ -4191,7 +4191,7 @@ class PartialEvaluator {
         } else if (
           byte < 0x21 ||
           byte > 0x7e ||
-          /[A-Za-z]/.test(String.fromCharCode(byte))
+          /[a-z]/i.test(String.fromCharCode(byte))
         ) {
           isHebrew = false;
           break;
