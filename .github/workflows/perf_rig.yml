@@ -1,0 +1,74 @@
+name: Random access perf rig
+# Full read vs random access (range transport, no auto-fetch), every variant in the same job (same machine),
+# runs alternated; medians and PDF bytes read are printed. Books are made in the job
+# (test/perf_rig/make_pdf.mjs: scan-like JPEG pages), one shard per book size.
+on:
+  push:
+    branches:
+      - sidecar-index
+    paths:
+      - test/perf_rig/**
+      - .github/workflows/perf_rig.yml
+      - src/core/chunked_stream.js
+      - src/core/worker.js
+      - web/pdf_find_controller.js
+      - web/pdf_term_index.js
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  rig:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - book: small
+            pages: 40
+          - book: mid
+            pages: 110
+          - book: big
+            pages: 830
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build the library and viewer components
+        run: |
+          npx gulp generic components
+          mkdir -p rig-dist/build rig-dist/web
+          cp build/generic/build/*.mjs rig-dist/build/
+          cp -r build/components/* rig-dist/web/
+          cp -r build/generic/web/cmaps build/generic/web/standard_fonts build/generic/web/wasm build/generic/web/iccs rig-dist/
+      - name: Make the test book
+        run: |
+          mkdir -p rig-books
+          node test/perf_rig/make_pdf.mjs rig-books/${{ matrix.book }}.pdf ${{ matrix.pages }}
+      - name: A/B (alternating runs, medians)
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: |
+          PORT=5291 DIST=$PWD/rig-dist BOOKS=$PWD/rig-books node test/perf_rig/server.mjs &
+          sleep 2
+          BOOKS=$PWD/rig-books node test/perf_rig/ab.mjs ${{ matrix.book }} 7 '[
+            {"name":"full","port":5291,"opts":{"mode":"full"}},
+            {"name":"ranges","port":5291,"opts":{"mode":"sparse"},"bytesCheck":true}
+          ]' | tee rig.log; test ${PIPESTATUS[0]} -eq 0
+          echo "PDF size: $(stat -c %s rig-books/${{ matrix.book }}.pdf) bytes"
+          grep -E "^RESULT|^BYTES|FAIL" rig.log
+          ! grep -q "BYTES TOO MANY" rig.log
+      - name: First search, index learning on vs off (time, bytes, heap peak)
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: |
+          PORT=5292 DIST=$PWD/rig-dist BOOKS=$PWD/rig-books node test/perf_rig/server.mjs &
+          sleep 2
+          PORT=5292 node test/perf_rig/search.mjs ${{ matrix.book }} 5 amar zebra | tee search.log
+          grep -E "^SEARCH|FAIL" search.log

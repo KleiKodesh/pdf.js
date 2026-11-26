@@ -893,8 +893,18 @@ class WorkerMessageHandler {
       if (isPureXfa) {
         flatten = false;
       }
+      // Random access (a range transport, no auto-fetch): an update section
+      // needs only the bytes it reads (the last section, the bytes before it),
+      // so the file is not loaded whole for it; see `ensureBytes` below.
+      const sparse = sectionOnly && !!manager.streamManager;
+      const ensureBytes = (begin, end) =>
+        sparse
+          ? manager.streamManager.requestRange(Math.max(0, begin), end)
+          : Promise.resolve();
       const globalPromises = [
-        manager.requestLoadedStream(),
+        sparse
+          ? Promise.resolve(manager.streamManager.getStream())
+          : manager.requestLoadedStream(),
         manager.ensureCatalog("acroForm"),
         manager.ensureCatalog("acroFormRef"),
         manager.ensureDoc("startXRef"),
@@ -1106,6 +1116,9 @@ class WorkerMessageHandler {
       }
 
       let originalData = stream.bytes;
+      if (sparse && Number.isInteger(startXRef)) {
+        await ensureBytes(startXRef, stream.bytes.length);
+      }
       if (mergeIntoLastUpdate && newXrefInfo.startXRef !== undefined) {
         // Write the last update section again, with this save's changes,
         // instead of appending one more section. A signed section is never
@@ -1115,7 +1128,32 @@ class WorkerMessageHandler {
           await import(
             /* webpackChunkName: "writer" */ "./last_update_section.js"
           );
-        const section = findLastUpdateSection(stream.bytes, xref, startXRef);
+        let section = null;
+        if (!sparse) {
+          section = findLastUpdateSection(stream.bytes, xref, startXRef);
+        } else {
+          // Unread bytes are zeros: read back from the xref a window at a
+          // time, and take the section only when all of it was read (its
+          // start inside the window), while there is a previous revision.
+          let hasPrev = false;
+          try {
+            hasPrev = Number.isInteger(
+              xref.readXRefSection(stream.bytes, startXRef).dict.get("Prev")
+            );
+          } catch {}
+          for (let w = 1 << 18; hasPrev; w *= 2) {
+            const from = Math.max(0, startXRef - w);
+            await ensureBytes(from, startXRef);
+            const found = findLastUpdateSection(stream.bytes, xref, startXRef);
+            if (found && found.start >= from) {
+              section = found;
+              break;
+            }
+            if (from === 0) {
+              break;
+            }
+          }
+        }
         if (section && !section.signed) {
           try {
             const sectionChanges = await getLastUpdateSectionChanges(
@@ -1138,6 +1176,10 @@ class WorkerMessageHandler {
         }
       }
 
+      if (sparse) {
+        // The anchor: the bytes right before the section start.
+        await ensureBytes(originalData.length - 64, originalData.length);
+      }
       return incrementalUpdate({
         originalData,
         xrefInfo: newXrefInfo,

@@ -13,6 +13,8 @@
  * limitations under the License.
  */
 
+import { PDFSearchIndexStore } from "./pdf_search_index_store.js";
+
 const DEFAULT_VIEW_HISTORY_CACHE_SIZE = 20;
 
 /**
@@ -45,6 +47,8 @@ class ViewHistory {
       }
       this.file = database.files[index];
       this.database = database;
+      // A file's search index lives as long as its view history entry.
+      PDFSearchIndexStore.retainOnly(database.files.map(f => f.fingerprint));
     });
   }
 

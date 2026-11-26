@@ -481,6 +481,13 @@ function getDocument(src = {}) {
           pagesMapper
         );
         task._transport = transport;
+        if (rangeTransport && !data) {
+          // Random access never loads the whole file ("DataLoaded"): the size
+          // is the range transport's.
+          transport.downloadInfoCapability.resolve({
+            length: rangeTransport.length,
+          });
+        }
 
         if (task.destroyed) {
           // `destroy()` was called during the worker handshake; the orderly

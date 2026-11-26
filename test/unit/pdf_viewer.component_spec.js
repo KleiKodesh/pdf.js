@@ -13,6 +13,10 @@
  * limitations under the License.
  */
 
+import {
+  ensureSearchIndex,
+  PDFSearchIndexStore,
+} from "../../web/pdf_search_index_store.js";
 import { FindState, PDFFindController } from "../../web/pdf_find_controller.js";
 import {
   LinkTarget,
@@ -33,6 +37,8 @@ import { PDFHistory } from "../../web/pdf_history.js";
 import { PDFPageView } from "../../web/pdf_page_view.js";
 import { PDFScriptingManager } from "../../web/pdf_scripting_manager.component.js";
 import { PDFSinglePageViewer } from "../../web/pdf_single_page_viewer.js";
+import { PdfTermIndex } from "../../web/pdf_term_index.js";
+import { PdfTextIndex } from "../../web/pdf_text_index.js";
 import { PDFViewer } from "../../web/pdf_viewer.js";
 import { RenderingStates } from "../../web/renderable_view.js";
 import { StructTreeLayerBuilder } from "../../web/struct_tree_layer_builder.js";
@@ -42,6 +48,7 @@ import { XfaLayerBuilder } from "../../web/xfa_layer_builder.js";
 const expectedAPI = Object.freeze({
   AnnotationLayerBuilder,
   DownloadManager,
+  ensureSearchIndex,
   EventBus,
   FindState,
   GenericL10n,
@@ -52,7 +59,10 @@ const expectedAPI = Object.freeze({
   PDFLinkService,
   PDFPageView,
   PDFScriptingManager,
+  PDFSearchIndexStore,
   PDFSinglePageViewer,
+  PdfTermIndex,
+  PdfTextIndex,
   PDFViewer,
   ProgressBar,
   RenderingStates,

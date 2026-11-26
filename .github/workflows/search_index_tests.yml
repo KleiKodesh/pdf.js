@@ -1,0 +1,58 @@
+name: Search index tests
+on:
+  push:
+    branches:
+      - sidecar-index
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint the changed files
+        run: >
+          npx eslint src/core/worker.js web/pdf_search_index_store.js
+          web/view_history.js web/app.js web/pdf_fm_index.js web/pdf_text_index.js
+          web/pdf_term_index.js web/pdf_find_controller.js test/text_index_bench.mjs
+          web/pdf_viewer.component.js test/unit/pdf_viewer.component_spec.js
+
+      - name: Text index parity + bench (FM and inverted index vs PDFFindController)
+        run: |
+          set -o pipefail
+          status=0
+          for f in synthetic test/pdfs/tracemonkey.pdf test/pdfs/ArabicCIDTrueType.pdf test/pdfs/basicapi.pdf test/pdfs/Type3WordSpacing.pdf test/pdfs/type3_advance.pdf test/pdfs/vertical.pdf test/pdfs/perf_text_cmap_mixed.pdf; do
+            node test/text_index_bench.mjs "$f" > ti.log 2>&1 || status=1
+            grep -E "^FILE|MISMATCH|^PARITY| default " ti.log
+          done
+          exit $status
+
+      - name: Build generic
+        run: npx gulp generic
+
+      - name: Unit tests (lib-legacy, all CLI specs)
+        run: npx gulp unittestcli 2>&1 | tee unittest.log
+
+      - name: Key results
+        if: always()
+        run: |
+          echo "### Unit specs"
+          grep -E "specs?, [0-9]+ failures?|Failures:|^[0-9]+\) " unittest.log | head -60 || true

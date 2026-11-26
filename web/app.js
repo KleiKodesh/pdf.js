@@ -77,6 +77,7 @@ import { CaretBrowsingMode } from "./caret_browsing.js";
 import { CommentManager } from "./comment_manager.js";
 import { DownloadManager } from "web-download_manager";
 import { EditorUndoBar } from "./editor_undo_bar.js";
+import { ensureSearchIndex } from "./pdf_search_index_store.js";
 import { internalOpt } from "./internal_evt.js";
 import { OverlayManager } from "./overlay_manager.js";
 import { PasswordPrompt } from "./password_prompt.js";
@@ -1853,6 +1854,23 @@ const PDFViewerApplication = {
         scrollMode: ScrollMode.UNKNOWN,
         spreadMode: SpreadMode.UNKNOWN,
       })
+      .catch(noopFn);
+
+    // The search index: loaded once the pages are set up; it grows from the
+    // pages searches read and makes later searches read only candidates.
+    this.findController.textIndex = null;
+    const isCurrent = () => this.pdfDocument === pdfDocument;
+    pagesPromise
+      .then(() =>
+        ensureSearchIndex(pdfDocument, pdfDocument.fingerprints[0], {
+          isCurrent,
+          onIndex: index => {
+            if (isCurrent()) {
+              this.findController.textIndex = index;
+            }
+          },
+        })
+      )
       .catch(noopFn);
 
     firstPagePromise.then(pdfPage => {

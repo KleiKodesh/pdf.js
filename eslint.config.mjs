@@ -46,6 +46,8 @@ export default [
       "test/stats/results/",
       "test/tmp/",
       "test/pdfs/",
+      // Browser perf rig: page scripts import the built library by URL.
+      "test/perf_rig/",
       "web/locale/",
       "web/wasm/",
       "**/*~/",
