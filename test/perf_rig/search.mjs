@@ -8,7 +8,11 @@ const [book, rounds, query, query2] = process.argv.slice(2);
 const res = { on: [], off: [] };
 
 async function runOnce(index) {
-  const browser = await puppeteer.launch({ headless: true, executablePath: process.env.CHROME || undefined, args: ["--no-sandbox"] });
+  const browser = await puppeteer.launch({
+    headless: true,
+    executablePath: process.env.CHROME || undefined,
+    args: ["--no-sandbox"],
+  });
   try {
     const page = await browser.newPage();
     page.on("pageerror", e => console.error("ERR", e.message));
@@ -30,7 +34,12 @@ async function runOnce(index) {
         await new Promise(r => setTimeout(r, 100));
       }
     })();
-    const r = await page.evaluate(o => searchRun(o), { book, index, query, query2 });
+    const r = await page.evaluate(o => searchRun(o), {
+      book,
+      index,
+      query,
+      query2,
+    });
     sampling = false;
     await sampler;
     return { ...r, peakMain, peakWorker };
@@ -52,7 +61,26 @@ const med = a => {
   const s = a.filter(x => typeof x === "number").sort((x, y) => x - y);
   return s.length ? s[Math.floor(s.length / 2)] : null;
 };
-const keys = ["first", "all", "hits", "bytes", "peakMain", "peakWorker", "indexReadyMs", "indexMemBytes", "indexStoredBytes", "secondCandidates", "secondIndexMs", "secondBytes"];
+const keys = [
+  "first",
+  "all",
+  "hits",
+  "bytes",
+  "peakMain",
+  "peakWorker",
+  "indexReadyMs",
+  "indexMemBytes",
+  "indexStoredBytes",
+  "secondCandidates",
+  "secondIndexMs",
+  "secondBytes",
+];
 for (const mode of ["on", "off"]) {
-  console.log(`SEARCH ${book} index=${mode} n=${res[mode].length} ` + keys.map(k => `${k}=${med(res[mode].map(x => x[k]))}`).filter(x => !x.endsWith("=null")).join(" "));
+  console.log(
+    `SEARCH ${book} index=${mode} n=${res[mode].length} ` +
+      keys
+        .map(k => `${k}=${med(res[mode].map(x => x[k]))}`)
+        .filter(x => !x.endsWith("=null"))
+        .join(" ")
+  );
 }

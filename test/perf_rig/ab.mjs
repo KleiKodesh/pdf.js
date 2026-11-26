@@ -35,7 +35,9 @@ function checkBytes(name, rec) {
   }
   // Skeleton (header, xref, catalog, page tree, fonts) + the touched pages at
   // the book's average page size, with room for part rounding.
-  const allowed = Math.round((3 << 19) + touched.size * (size / rec.cold.pages) * 1.5);
+  const allowed = Math.round(
+    (3 << 19) + touched.size * (size / rec.cold.pages) * 1.5
+  );
   const ok = rec.bytesTotal <= allowed && rec.bytesTotal < size;
   if (!ok) {
     bad++;

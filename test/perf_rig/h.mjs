@@ -2,7 +2,13 @@
 // host answers without Content-Length) or by random access (a range transport, no auto-fetch)
 // guided by the sidecar page byte map. See README in this folder's ab.mjs/drive.mjs.
 import * as pdfjs from "/dist/build/pdf.mjs";
-import { EventBus, PDFFindController, PDFLinkService, PdfTermIndex, PDFViewer } from "/dist/web/pdf_viewer.mjs";
+import {
+  EventBus,
+  PDFFindController,
+  PDFLinkService,
+  PdfTermIndex,
+  PDFViewer,
+} from "/dist/web/pdf_viewer.mjs";
 
 const {
   GlobalWorkerOptions,
@@ -135,11 +141,24 @@ window.searchRun = async o => {
   }
   await fetch("/bytes?reset=1");
   const url = `/pdf/wv2/${o.book}.pdf`;
-  task = getDocument({ worker, range: await rangeSource(url), rangeChunkSize: 65536, disableAutoFetch: true, disableStream: true, cMapUrl: R + "cmaps/", cMapPacked: true, standardFontDataUrl: R + "standard_fonts/", wasmUrl: R + "wasm/" });
+  task = getDocument({
+    worker,
+    range: await rangeSource(url),
+    rangeChunkSize: 65536,
+    disableAutoFetch: true,
+    disableStream: true,
+    cMapUrl: R + "cmaps/",
+    cMapPacked: true,
+    standardFontDataUrl: R + "standard_fonts/",
+    wasmUrl: R + "wasm/",
+  });
   const doc = await task.promise;
   const base = await bytes();
   const eb = new EventBus();
-  const fc = new PDFFindController({ eventBus: eb, linkService: { pagesCount: doc.numPages, page: 1 } });
+  const fc = new PDFFindController({
+    eventBus: eb,
+    linkService: { pagesCount: doc.numPages, page: 1 },
+  });
   fc.setDocument(doc);
   const index = o.index ? new PdfTermIndex(doc.numPages) : null;
   fc.textIndex = index;
@@ -150,7 +169,16 @@ window.searchRun = async o => {
       first = Math.round(now() - t0);
     }
   });
-  eb.dispatch("find", { source: null, type: "", query: o.query, caseSensitive: false, entireWord: false, findPrevious: false, matchDiacritics: false, highlightAll: false });
+  eb.dispatch("find", {
+    source: null,
+    type: "",
+    query: o.query,
+    caseSensitive: false,
+    entireWord: false,
+    findPrevious: false,
+    matchDiacritics: false,
+    highlightAll: false,
+  });
   for (;;) {
     await new Promise(r => setTimeout(r, 5));
     let done = true;
@@ -165,7 +193,12 @@ window.searchRun = async o => {
     }
   }
   const all = Math.round(now() - t0);
-  const out = { first, all, hits: fc.pageMatches.reduce((a, m) => a + m.length, 0), bytes: (await bytes()) - base };
+  const out = {
+    first,
+    all,
+    hits: fc.pageMatches.reduce((a, m) => a + m.length, 0),
+    bytes: (await bytes()) - base,
+  };
   if (index) {
     // Wait for the index to take the pages (idle time), then a second search.
     const t1 = now();
