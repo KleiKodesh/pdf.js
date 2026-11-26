@@ -21,27 +21,21 @@ const flat = r => {
 };
 // Bytes check (random access): a session may read only the pages it touched (rendered, plus
 // the read-ahead around them) and the document's skeleton - never the whole file.
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 let bad = 0;
 function checkBytes(name, rec) {
-  const dir = process.env.BOOKS;
-  const map = JSON.parse(readFileSync(`${dir}/${book}.pages.json`, "utf8"));
-  const size = statSync(`${dir}/${book}.pdf`).size;
+  const size = statSync(`${process.env.BOOKS}/${book}.pdf`).size;
   const touched = new Set();
   for (const n of rec.rendered) {
-    for (let k = n - 1; k <= n + 3; k++) {
-      if (k >= 1 && k <= map.length) {
+    for (let k = n - 1; k <= n + 1; k++) {
+      if (k >= 1 && k <= rec.cold.pages) {
         touched.add(k);
       }
     }
   }
-  let allowed = 1 << 20; // skeleton: header, xref, catalog, page tree, fonts
-  for (const n of touched) {
-    const spans = map[n - 1] || [];
-    for (let i = 1; i < spans.length; i += 2) {
-      allowed += spans[i] + 65536; // + one part of rounding per span
-    }
-  }
+  // Skeleton (header, xref, catalog, page tree, fonts) + the touched pages at
+  // the book's average page size, with room for part rounding.
+  const allowed = Math.round((3 << 19) + touched.size * (size / rec.cold.pages) * 1.5);
   const ok = rec.bytesTotal <= allowed && rec.bytesTotal < size;
   if (!ok) {
     bad++;

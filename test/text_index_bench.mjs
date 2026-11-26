@@ -51,6 +51,7 @@ const { EventBus } = await import("../web/event_utils.js");
 const { PDFFindController } = await import("../web/pdf_find_controller.js");
 const { PdfTextIndex } = await import("../web/pdf_text_index.js");
 const { PdfTermIndex } = await import("../web/pdf_term_index.js");
+globalThis.requestIdleCallback ??= f => setTimeout(() => f(null), 0);
 
 setVerbosityLevel(0);
 Math.sumPrecise ??= values => values.reduce((a, b) => a + b, 0);

@@ -14,10 +14,9 @@
  */
 
 import {
-  ensureSidecar,
-  ensureTextIndex,
-  PDFSidecarStore,
-} from "../../web/pdf_sidecar_store.js";
+  ensureSearchIndex,
+  PDFSearchIndexStore,
+} from "../../web/pdf_search_index_store.js";
 import { FindState, PDFFindController } from "../../web/pdf_find_controller.js";
 import {
   LinkTarget,
@@ -49,8 +48,7 @@ import { XfaLayerBuilder } from "../../web/xfa_layer_builder.js";
 const expectedAPI = Object.freeze({
   AnnotationLayerBuilder,
   DownloadManager,
-  ensureSidecar,
-  ensureTextIndex,
+  ensureSearchIndex,
   EventBus,
   FindState,
   GenericL10n,
@@ -61,7 +59,7 @@ const expectedAPI = Object.freeze({
   PDFLinkService,
   PDFPageView,
   PDFScriptingManager,
-  PDFSidecarStore,
+  PDFSearchIndexStore,
   PDFSinglePageViewer,
   PdfTermIndex,
   PdfTextIndex,

@@ -1,4 +1,4 @@
-name: Sidecar tests
+name: Search index tests
 on:
   push:
     branches:
@@ -30,12 +30,10 @@ jobs:
 
       - name: Lint the changed files
         run: >
-          npx eslint src/core/pdf_sidecar.js src/core/sidecar_find.js web/pdf_sidecar_codec.js
-          src/core/worker.js src/display/api.js web/pdf_sidecar_store.js
-          web/view_history.js web/app.js test/unit/pdf_sidecar_spec.js
-          test/sidecar_bench.mjs web/pdf_fm_index.js web/pdf_text_index.js web/pdf_term_index.js
-          web/pdf_find_controller.js test/text_index_bench.mjs
-          web/pdf_viewer.component.js
+          npx eslint src/core/worker.js web/pdf_search_index_store.js
+          web/view_history.js web/app.js web/pdf_fm_index.js web/pdf_text_index.js
+          web/pdf_term_index.js web/pdf_find_controller.js test/text_index_bench.mjs
+          web/pdf_viewer.component.js test/unit/pdf_viewer.component_spec.js
 
       - name: Text index parity + bench (FM and inverted index vs PDFFindController)
         run: |
@@ -50,17 +48,11 @@ jobs:
       - name: Build generic
         run: npx gulp generic
 
-      - name: Unit tests (lib-legacy, all CLI specs incl. pdf_sidecar_spec)
+      - name: Unit tests (lib-legacy, all CLI specs)
         run: npx gulp unittestcli 2>&1 | tee unittest.log
 
       - name: Key results
         if: always()
         run: |
-          echo "### Sidecar + find/text specs"
-          grep -E "pdf_sidecar|specs?, [0-9]+ failures?|Failures:|^[0-9]+\) " unittest.log | head -60 || true
-
-      - name: Sidecar bench (build time/size, direct search vs getTextContent)
-        run: |
-          for f in tracemonkey.pdf ArabicCIDTrueType.pdf basicapi.pdf Type3WordSpacing.pdf type3_advance.pdf vertical.pdf perf_text_cmap_mixed.pdf; do
-            node test/sidecar_bench.mjs "test/pdfs/$f" the trace JavaScript zebra "trace tree" "$(printf 'ال')"
-          done
+          echo "### Unit specs"
+          grep -E "specs?, [0-9]+ failures?|Failures:|^[0-9]+\) " unittest.log | head -60 || true

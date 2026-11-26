@@ -374,7 +374,7 @@ class PdfTermIndex {
       const mark = new Uint8Array(this.numPages);
       if (!view.atomPages(atom, mark)) {
         cand = null;
-        return { pages: [], exact: true, missing };
+        return { pages: [], exact: missing.length === 0, missing };
       }
       if (cand) {
         for (let i = 0; i < mark.length; i++) {
@@ -390,7 +390,11 @@ class PdfTermIndex {
         pages.push({ pageIndex: i, count: -1 });
       }
     }
-    return { pages, exact: pages.length === 0, missing };
+    return {
+      pages,
+      exact: pages.length === 0 && missing.length === 0,
+      missing,
+    };
   }
 
   /**

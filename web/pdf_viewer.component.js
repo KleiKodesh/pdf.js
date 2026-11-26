@@ -14,10 +14,9 @@
  */
 
 import {
-  ensureSidecar,
-  ensureTextIndex,
-  PDFSidecarStore,
-} from "./pdf_sidecar_store.js";
+  ensureSearchIndex,
+  PDFSearchIndexStore,
+} from "./pdf_search_index_store.js";
 import { FindState, PDFFindController } from "./pdf_find_controller.js";
 import {
   LinkTarget,
@@ -49,8 +48,7 @@ import { XfaLayerBuilder } from "./xfa_layer_builder.js";
 globalThis.pdfjsViewer = {
   AnnotationLayerBuilder,
   DownloadManager,
-  ensureSidecar,
-  ensureTextIndex,
+  ensureSearchIndex,
   EventBus,
   FindState,
   GenericL10n,
@@ -61,7 +59,7 @@ globalThis.pdfjsViewer = {
   PDFLinkService,
   PDFPageView,
   PDFScriptingManager,
-  PDFSidecarStore,
+  PDFSearchIndexStore,
   PDFSinglePageViewer,
   PdfTermIndex,
   PdfTextIndex,
@@ -79,8 +77,7 @@ globalThis.pdfjsViewer = {
 export {
   AnnotationLayerBuilder,
   DownloadManager,
-  ensureSidecar,
-  ensureTextIndex,
+  ensureSearchIndex,
   EventBus,
   FindState,
   GenericL10n,
@@ -91,7 +88,7 @@ export {
   PDFLinkService,
   PDFPageView,
   PDFScriptingManager,
-  PDFSidecarStore,
+  PDFSearchIndexStore,
   PDFSinglePageViewer,
   PdfTermIndex,
   PdfTextIndex,

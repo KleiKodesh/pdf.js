@@ -979,6 +979,43 @@ class PDFFindController {
     return this._extractTextPromises[i];
   }
 
+  #indexQueue = [];
+
+  #indexScheduled = false;
+
+  /** Adds extracted pages to `index` while the thread is idle. */
+  #queueIndexPage(index, pageIndex, pageString) {
+    this.#indexQueue.push([index, pageIndex, pageString]);
+    if (this.#indexScheduled) {
+      return;
+    }
+    this.#indexScheduled = true;
+    const later =
+      typeof requestIdleCallback === "function"
+        ? f => requestIdleCallback(f, { timeout: 2000 })
+        : f => setTimeout(() => f(null), 50);
+    const work = deadline => {
+      while (this.#indexQueue.length) {
+        if (deadline && deadline.timeRemaining() < 2) {
+          later(work);
+          return;
+        }
+        const [idx, i, str] = this.#indexQueue.shift();
+        if (idx !== this.textIndex || idx.indexed[i]) {
+          continue;
+        }
+        try {
+          idx.addPages(i, [str]);
+          idx.onPagesAdded?.();
+        } catch (ex) {
+          console.error("Text index: adding a page failed", ex);
+        }
+      }
+      this.#indexScheduled = false;
+    };
+    later(work);
+  }
+
   /**
    * The pages the text index rules out for the current search (no match
    * there): indexed pages it doesn't list.
@@ -1061,15 +1098,10 @@ class PDFFindController {
         [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
           normalize(pageString);
         // The text index learns the page from this same extraction (one
-        // getTextContent per page for both).
-        const index = this.textIndex;
-        if (index?.addPages && !index.indexed[i] && !isStale()) {
-          try {
-            index.addPages(i, [pageString]);
-            index.onPagesAdded?.();
-          } catch (ex) {
-            console.error("Text index: adding a page failed", ex);
-          }
+        // getTextContent per page for both), in idle time: never on the
+        // search's path.
+        if (this.textIndex?.addPages && !this.textIndex.indexed[i]) {
+          this.#queueIndexPage(this.textIndex, i, pageString);
         }
       } catch (ex) {
         if (isStale()) {

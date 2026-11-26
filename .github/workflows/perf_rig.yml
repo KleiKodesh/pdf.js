@@ -1,5 +1,5 @@
 name: Random access perf rig
-# Full read vs sidecar-guided random access, every variant in the same job (same machine),
+# Full read vs random access (range transport, no auto-fetch), every variant in the same job (same machine),
 # runs alternated; medians and PDF bytes read are printed. Books are made in the job
 # (test/perf_rig/make_pdf.mjs: scan-like JPEG pages), one shard per book size.
 on:
@@ -11,7 +11,8 @@ on:
       - .github/workflows/perf_rig.yml
       - src/core/chunked_stream.js
       - src/core/worker.js
-      - src/core/pdf_sidecar.js
+      - web/pdf_find_controller.js
+      - web/pdf_term_index.js
   workflow_dispatch:
 permissions:
   contents: read
@@ -46,11 +47,10 @@ jobs:
           cp build/generic/build/*.mjs rig-dist/build/
           cp -r build/components/* rig-dist/web/
           cp -r build/generic/web/cmaps build/generic/web/standard_fonts build/generic/web/wasm build/generic/web/iccs rig-dist/
-      - name: Make the test book and its sidecar page map
+      - name: Make the test book
         run: |
           mkdir -p rig-books
           node test/perf_rig/make_pdf.mjs rig-books/${{ matrix.book }}.pdf ${{ matrix.pages }}
-          node test/perf_rig/pagebytes.mjs rig-books/${{ matrix.book }}.pdf rig-books/${{ matrix.book }}.pages.json
       - name: A/B (alternating runs, medians)
         env:
           CHROME: /usr/bin/google-chrome
@@ -59,16 +59,16 @@ jobs:
           sleep 2
           BOOKS=$PWD/rig-books node test/perf_rig/ab.mjs ${{ matrix.book }} 7 '[
             {"name":"full","port":5291,"opts":{"mode":"full"}},
-            {"name":"sparse","port":5291,"opts":{"mode":"sparse"}},
-            {"name":"sparse+map","port":5291,"opts":{"mode":"sparse","map":true},"bytesCheck":true}
+            {"name":"ranges","port":5291,"opts":{"mode":"sparse"},"bytesCheck":true}
           ]' | tee rig.log; test ${PIPESTATUS[0]} -eq 0
           echo "PDF size: $(stat -c %s rig-books/${{ matrix.book }}.pdf) bytes"
           grep -E "^RESULT|^BYTES|FAIL" rig.log
           ! grep -q "BYTES TOO MANY" rig.log
-      - name: Sidecar and search costs (bytes read, ms)
+      - name: First search, index learning on vs off (time, bytes, heap peak)
         env:
           CHROME: /usr/bin/google-chrome
         run: |
           PORT=5292 DIST=$PWD/rig-dist BOOKS=$PWD/rig-books node test/perf_rig/server.mjs &
           sleep 2
-          PORT=5292 node test/perf_rig/costs.mjs ${{ matrix.book }} amar zebra
+          PORT=5292 node test/perf_rig/search.mjs ${{ matrix.book }} 5 amar zebra | tee search.log
+          grep -E "^SEARCH|FAIL" search.log

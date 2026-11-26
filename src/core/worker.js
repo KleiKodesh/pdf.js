@@ -33,7 +33,6 @@ import { LocalPdfManager, NetworkPdfManager } from "./pdf_manager.js";
 import { MessageHandler, wrapReason } from "../shared/message_handler.js";
 import { AnnotationFactory } from "./annotation.js";
 import { clearGlobalCaches } from "./cleanup_helper.js";
-import { PdfSidecar } from "./pdf_sidecar.js";
 import { PDFWorkerStream } from "./worker_stream.js";
 import { stringToPDFString } from "./string_utils.js";
 import { StructTreeRoot } from "./struct_tree.js";
@@ -386,7 +385,6 @@ class WorkerMessageHandler {
     }
 
     handler.on("GetPage", async function ({ pageIndex }) {
-      await prefetchPageBytes(pageIndex);
       const page = await pdfManager.getPage(pageIndex);
 
       const [rotate, ref, userUnit, view] = await Promise.all([
@@ -402,62 +400,6 @@ class WorkerMessageHandler {
         userUnit,
         view,
       };
-    });
-
-    // The sidecar index (see pdf_sidecar.js): built in steps, kept in the
-    // worker for direct search; the viewer stores it and hands it back.
-    const getSidecar = () =>
-      (pdfManager.sidecar ||= new PdfSidecar(pdfManager));
-    const runSidecarTask = async (name, fn) => {
-      const task = new WorkerTask(name);
-      startWorkerTask(task);
-      try {
-        return await fn(task);
-      } finally {
-        finishWorkerTask(task);
-      }
-    };
-
-    handler.on("SidecarBuild", function (params) {
-      return runSidecarTask("SidecarBuild", task =>
-        getSidecar().build(params, handler, task)
-      );
-    });
-
-    handler.on("SidecarGet", function () {
-      return getSidecar().data;
-    });
-
-    handler.on("SidecarLoad", function ({ data }) {
-      return getSidecar().load(data);
-    });
-
-    // Random access: with the sidecar's page byte map, a page's whole byte
-    // set is requested at once (grouped into as few reads as possible) before
-    // its objects are parsed, instead of one missing object at a time.
-    const prefetchPageBytes = pageIndex => {
-      const spans = pdfManager.sidecar?.data.pageBytes?.[pageIndex];
-      const manager = pdfManager.streamManager;
-      if (!spans || !manager || manager.getStream().isDataLoaded) {
-        return Promise.resolve();
-      }
-      const ranges = [];
-      for (let i = 0; i + 1 < spans.length; i += 2) {
-        ranges.push({ begin: spans[i], end: spans[i] + spans[i + 1] });
-      }
-      return manager.requestRanges(ranges).catch(() => {});
-    };
-
-    handler.on("PrefetchPages", function ({ pageIndexes }) {
-      for (const pageIndex of pageIndexes) {
-        prefetchPageBytes(pageIndex);
-      }
-    });
-
-    handler.on("SidecarSearch", function (params) {
-      return runSidecarTask("SidecarSearch", task =>
-        getSidecar().search(params, handler, task)
-      );
     });
 
     handler.on("GetPageIndex", function ({ num, gen }) {
@@ -951,8 +893,18 @@ class WorkerMessageHandler {
       if (isPureXfa) {
         flatten = false;
       }
+      // Random access (a range transport, no auto-fetch): an update section
+      // needs only the bytes it reads (the last section, the bytes before it),
+      // so the file is not loaded whole for it; see `ensureBytes` below.
+      const sparse = sectionOnly && !!manager.streamManager;
+      const ensureBytes = (begin, end) =>
+        sparse
+          ? manager.streamManager.requestRange(Math.max(0, begin), end)
+          : Promise.resolve();
       const globalPromises = [
-        manager.requestLoadedStream(),
+        sparse
+          ? Promise.resolve(manager.streamManager.getStream())
+          : manager.requestLoadedStream(),
         manager.ensureCatalog("acroForm"),
         manager.ensureCatalog("acroFormRef"),
         manager.ensureDoc("startXRef"),
@@ -1164,6 +1116,9 @@ class WorkerMessageHandler {
       }
 
       let originalData = stream.bytes;
+      if (sparse && Number.isInteger(startXRef)) {
+        await ensureBytes(startXRef, stream.bytes.length);
+      }
       if (mergeIntoLastUpdate && newXrefInfo.startXRef !== undefined) {
         // Write the last update section again, with this save's changes,
         // instead of appending one more section. A signed section is never
@@ -1173,7 +1128,32 @@ class WorkerMessageHandler {
           await import(
             /* webpackChunkName: "writer" */ "./last_update_section.js"
           );
-        const section = findLastUpdateSection(stream.bytes, xref, startXRef);
+        let section = null;
+        if (!sparse) {
+          section = findLastUpdateSection(stream.bytes, xref, startXRef);
+        } else {
+          // Unread bytes are zeros: read back from the xref a window at a
+          // time, and take the section only when all of it was read (its
+          // start inside the window), while there is a previous revision.
+          let hasPrev = false;
+          try {
+            hasPrev = Number.isInteger(
+              xref.readXRefSection(stream.bytes, startXRef).dict.get("Prev")
+            );
+          } catch {}
+          for (let w = 1 << 18; hasPrev; w *= 2) {
+            const from = Math.max(0, startXRef - w);
+            await ensureBytes(from, startXRef);
+            const found = findLastUpdateSection(stream.bytes, xref, startXRef);
+            if (found && found.start >= from) {
+              section = found;
+              break;
+            }
+            if (from === 0) {
+              break;
+            }
+          }
+        }
         if (section && !section.signed) {
           try {
             const sectionChanges = await getLastUpdateSectionChanges(
@@ -1196,6 +1176,10 @@ class WorkerMessageHandler {
         }
       }
 
+      if (sparse) {
+        // The anchor: the bytes right before the section start.
+        await ensureBytes(originalData.length - 64, originalData.length);
+      }
       return incrementalUpdate({
         originalData,
         xrefInfo: newXrefInfo,
@@ -1247,39 +1231,37 @@ class WorkerMessageHandler {
         },
         sink
       ) {
-        prefetchPageBytes(pageIndex)
-          .then(() => pdfManager.getPage(pageId))
-          .then(function (page) {
-            const task = new WorkerTask(`GetOperatorList: page ${pageIndex}`);
-            startWorkerTask(task);
+        pdfManager.getPage(pageId).then(function (page) {
+          const task = new WorkerTask(`GetOperatorList: page ${pageIndex}`);
+          startWorkerTask(task);
 
-            page
-              .getOperatorList({
-                handler,
-                sink,
-                task,
-                intent,
-                cacheKey,
-                annotationStorage,
-                modifiedIds,
-                pageIndex,
-                pageProxyId,
-              })
-              .then(
-                () => {
-                  sink.close();
-                },
-                reason => {
-                  if (task.terminated) {
-                    return; // ignoring errors from the terminated thread
-                  }
-                  sink.error(reason);
+          page
+            .getOperatorList({
+              handler,
+              sink,
+              task,
+              intent,
+              cacheKey,
+              annotationStorage,
+              modifiedIds,
+              pageIndex,
+              pageProxyId,
+            })
+            .then(
+              () => {
+                sink.close();
+              },
+              reason => {
+                if (task.terminated) {
+                  return; // ignoring errors from the terminated thread
                 }
-              )
-              .finally(() => {
-                finishWorkerTask(task);
-              });
-          });
+                sink.error(reason);
+              }
+            )
+            .finally(() => {
+              finishWorkerTask(task);
+            });
+        });
       }
     );
 
