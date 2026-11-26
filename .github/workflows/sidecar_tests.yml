@@ -49,6 +49,6 @@ jobs:
 
       - name: Sidecar bench (build time/size, direct search vs getTextContent)
         run: |
-          for f in tracemonkey.pdf ArabicCIDTrueType.pdf basicapi.pdf; do
+          for f in tracemonkey.pdf ArabicCIDTrueType.pdf basicapi.pdf Type3WordSpacing.pdf type3_advance.pdf vertical.pdf perf_text_cmap_mixed.pdf; do
             node test/sidecar_bench.mjs "test/pdfs/$f" the trace JavaScript "$(printf 'ال')"
           done
