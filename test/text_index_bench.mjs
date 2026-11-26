@@ -306,6 +306,11 @@ for (const kind of (process.env.INDEXES || "fm,terms").split(",")) {
   );
   indexes.push({ kind, loaded });
 }
+// An index that starts empty and learns pages only from the find controller's
+// own extractions (the viewer's no-background mode); shared by every query.
+if ((process.env.INDEXES || "fm,terms").includes("terms")) {
+  indexes.push({ kind: "grow", loaded: new PdfTermIndex(numPages) });
+}
 
 // The reference: PDFFindController itself on the same text contents.
 const eventBus = new EventBus();
@@ -406,7 +411,10 @@ for (const query of queries) {
         }
         ok = got.every((c, i) => c === ref[i]);
       } else {
-        const cand = new Set(res.pages.map(p => p.pageIndex));
+        const cand = new Set([
+          ...res.pages.map(p => p.pageIndex),
+          ...res.missing,
+        ]);
         ok = ref.every((c, i) => !c || cand.has(i));
       }
       checked++;

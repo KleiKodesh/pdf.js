@@ -55,11 +55,12 @@
  */
 
 import { buildMatcher, countMatches, normalizeText } from "./sidecar_find.js";
-import { Dict, isName, Name, Ref } from "./primitives.js";
+import { Dict, isCmd, isName, Name, Ref } from "./primitives.js";
 import { Lexer, Parser } from "./parser.js";
 import { BaseStream } from "./base_stream.js";
 import { getCharUnicodeCategory } from "./unicode.js";
 import { IdentityToUnicodeMap } from "./to_unicode_map.js";
+import { MissingDataException } from "./core_utils.js";
 import { Stream } from "./stream.js";
 import { warn } from "../shared/util.js";
 
@@ -484,9 +485,33 @@ class PdfSidecar {
     return this._spans;
   }
 
+  /**
+   * An object without its stream data: for a stream in the file, only its
+   * dictionary is parsed (the data, e.g. an image, is neither read nor
+   * decoded); objects inside an object stream come from the XRef.
+   */
+  _fetchDict(ref) {
+    const xref = this.xref;
+    const entry = xref.getEntry(ref.num);
+    if (!entry?.uncompressed) {
+      return xref.fetch(ref);
+    }
+    const stream = xref.stream.makeSubStream(entry.offset + xref.stream.start);
+    const parser = new Parser({
+      lexer: new Lexer(stream),
+      xref,
+      allowStreams: false,
+    });
+    const num = parser.getObj(),
+      gen = parser.getObj(),
+      cmd = parser.getObj();
+    return num !== ref.num || gen !== ref.gen || !isCmd(cmd, "obj")
+      ? xref.fetch(ref)
+      : parser.getObj();
+  }
+
   /** The merged byte spans of every object reachable from a page. */
   _pageBytes(pageRef) {
-    const xref = this.xref;
     const spanOf = this._objectSpans();
     const spans = [];
     const seen = new Set();
@@ -505,8 +530,11 @@ class PdfSidecar {
         }
         let obj;
         try {
-          obj = xref.fetch(v);
-        } catch {
+          obj = this._fetchDict(v);
+        } catch (ex) {
+          if (ex instanceof MissingDataException) {
+            throw ex; // `ensure` reads the bytes and runs this again
+          }
           continue;
         }
         todo.push(obj instanceof BaseStream ? obj.dict : obj);
@@ -533,18 +561,44 @@ class PdfSidecar {
     return out.flatMap(([a, b]) => [a, b - a]);
   }
 
-  /** Builds up to `maxPages` missing pages from `fromPage`. */
-  async build({ fromPage = 0, maxPages = 50 }, handler, task) {
+  /**
+   * Only the page byte map of a page: its objects' offsets, from the
+   * dictionaries alone (no content stream, font or image is decoded).
+   */
+  async buildPageBytes(pageIndex) {
+    if (this.data.pageBytes?.[pageIndex]) {
+      return;
+    }
+    const page = await this.pdfManager.getPage(pageIndex);
+    (this.data.pageBytes ||= [])[pageIndex] = await this.pdfManager.ensure(
+      this,
+      "_pageBytes",
+      [page.ref]
+    );
+  }
+
+  /**
+   * Builds up to `maxPages` missing pages from `fromPage`; with
+   * `pageBytesOnly`, only their byte map (see buildPageBytes).
+   */
+  async build(
+    { fromPage = 0, maxPages = 50, pageBytesOnly = false },
+    handler,
+    task
+  ) {
     const numPages = (this.data.numPages =
       this.pdfManager.pdfDocument.numPages);
     let i = fromPage;
     for (let n = 0; i < numPages && n < maxPages; i++, n++) {
       task.ensureNotTerminated();
-      await this.buildPage(i, handler, task);
+      await (pageBytesOnly
+        ? this.buildPageBytes(i)
+        : this.buildPage(i, handler, task));
     }
+    const have = pageBytesOnly ? this.data.pageBytes || [] : this.data.pages;
     let complete = true;
     for (let p = 0; p < numPages; p++) {
-      if (!this.data.pages[p]) {
+      if (!have[p]) {
         complete = false;
         break;
       }

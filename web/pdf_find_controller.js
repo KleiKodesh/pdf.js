@@ -1056,9 +1056,21 @@ class PDFFindController {
             strBuf.push("\n");
           }
         }
+        const pageString = strBuf.join("");
         // Store the normalized page content (text items) as one string.
         [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] =
-          normalize(strBuf.join(""));
+          normalize(pageString);
+        // The text index learns the page from this same extraction (one
+        // getTextContent per page for both).
+        const index = this.textIndex;
+        if (index?.addPages && !index.indexed[i] && !isStale()) {
+          try {
+            index.addPages(i, [pageString]);
+            index.onPagesAdded?.();
+          } catch (ex) {
+            console.error("Text index: adding a page failed", ex);
+          }
+        }
       } catch (ex) {
         if (isStale()) {
           resolve();

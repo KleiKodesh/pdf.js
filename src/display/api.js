@@ -871,14 +871,18 @@ class PDFDocumentProxy {
   /**
    * Builds the next step of the sidecar index (content-stream map and font
    * tables, see src/core/pdf_sidecar.js) for up to `maxPages` pages.
-   * @param {{fromPage?: number, maxPages?: number}} [params]
+   * With `pageBytesOnly`, only the page byte map (for random access; no
+   * content stream, font or image is decoded).
+   * @param {{fromPage?: number, maxPages?: number, pageBytesOnly?: boolean}}
+   *   [params]
    * @returns {Promise<{nextPage: number, reachedEnd: boolean,
    *   complete: boolean}>}
    */
-  buildSidecar({ fromPage = 0, maxPages = 50 } = {}) {
+  buildSidecar({ fromPage = 0, maxPages = 50, pageBytesOnly = false } = {}) {
     return this._transport.messageHandler.sendWithPromise("SidecarBuild", {
       fromPage,
       maxPages,
+      pageBytesOnly,
     });
   }
 

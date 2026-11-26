@@ -2,7 +2,7 @@
 // host answers without Content-Length) or by random access (a range transport, no auto-fetch)
 // guided by the sidecar page byte map. See README in this folder's ab.mjs/drive.mjs.
 import * as pdfjs from "/dist/build/pdf.mjs";
-import { EventBus, PDFLinkService, PDFViewer } from "/dist/web/pdf_viewer.mjs";
+import { ensureTextIndex, EventBus, PDFFindController, PDFLinkService, PDFViewer } from "/dist/web/pdf_viewer.mjs";
 
 const {
   GlobalWorkerOptions,
@@ -159,4 +159,96 @@ window.fling = async (pages, msPerPage) => {
   return { landing: n, img: await waitShown(n, t0) };
 };
 window.totalBytes = bytes;
+// Sidecar build costs on a random-access open (no page shown): bytes read and ms for the page
+// byte map only, the full sidecar (font tables, content streams) and the text index; then a
+// first search through PDFFindController with the index (pages it reads, bytes).
+window.buildCosts = async o => {
+  worker ||= new PDFWorker();
+  await worker.promise;
+  const open = async () => {
+    if (task) {
+      await task.destroy();
+    }
+    await fetch("/bytes?reset=1");
+    const url = `/pdf/wv2/${o.book}.pdf`;
+    task = getDocument({ worker, range: await rangeSource(url), rangeChunkSize: o.chunk || 65536, disableAutoFetch: true, disableStream: true, cMapUrl: R + "cmaps/", cMapPacked: true, standardFontDataUrl: R + "standard_fonts/", wasmUrl: R + "wasm/" });
+    return task.promise;
+  };
+  const out = {};
+  const build = async pageBytesOnly => {
+    const doc = await open();
+    const base = await bytes();
+    const t0 = now();
+    for (let from = 0; ; ) {
+      const step = await doc.buildSidecar({ fromPage: from, maxPages: 50, pageBytesOnly });
+      from = step.nextPage;
+      if (step.reachedEnd) {
+        break;
+      }
+    }
+    return { ms: Math.round(now() - t0), bytes: (await bytes()) - base };
+  };
+  const attempt = async f => {
+    try {
+      return await f();
+    } catch (ex) {
+      return { error: String(ex?.message || ex).slice(0, 200) };
+    }
+  };
+  out.pageMap = await attempt(() => build(true));
+  out.fullSidecar = await attempt(() => build(false));
+  let doc = await open();
+  let base = await bytes();
+  let t0 = now();
+  const index = await ensureTextIndex(doc, "rig-" + o.book + "-" + Math.random(), { stepPages: 32 });
+  out.textIndex = { ms: Math.round(now() - t0), bytes: (await bytes()) - base };
+  // Searches on a fresh open through PDFFindController: pages it reads and bytes.
+  const search = async (doc, idx, query) => {
+    const base0 = await bytes();
+    const t1 = now();
+    const eb = new EventBus();
+    const fc = new PDFFindController({ eventBus: eb, linkService: { pagesCount: doc.numPages, page: 1 } });
+    fc.setDocument(doc);
+    fc.textIndex = idx;
+    let extracted = 0;
+    if (!doc.__counted) {
+      doc.__counted = true;
+      const orig = doc.getPage.bind(doc);
+      doc.getPage = async n => {
+        const p = await orig(n);
+        if (!p.__counted) {
+          p.__counted = true;
+          const g = p.getTextContent.bind(p);
+          p.getTextContent = a => (window.__extracted++, g(a));
+        }
+        return p;
+      };
+    }
+    window.__extracted = 0;
+    eb.dispatch("find", { source: null, type: "", query, caseSensitive: false, entireWord: false, findPrevious: false, matchDiacritics: false, highlightAll: false });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 20));
+      let done = true;
+      for (let i = 0; i < doc.numPages; i++) {
+        if (!fc.pageMatches[i]) {
+          done = false;
+          break;
+        }
+      }
+      if (done) {
+        break;
+      }
+    }
+    extracted = window.__extracted;
+    return { ms: Math.round(now() - t1), bytes: (await bytes()) - base0, pagesRead: extracted, hits: fc.pageMatches.reduce((a, m) => a + m.length, 0) };
+  };
+  // Background-built index (old model) vs the index learning from searches (no background read).
+  doc = await open();
+  out.searchWithBuiltIndex = await search(doc, index, o.query || "amar");
+  doc = await open();
+  const grow = new index.constructor(doc.numPages);
+  out.firstSearchNoIndex = await search(doc, grow, o.query || "amar");
+  out.secondSearchLearned = await search(doc, grow, o.query2 || o.query || "amar");
+  return out;
+};
 window.ready = true;

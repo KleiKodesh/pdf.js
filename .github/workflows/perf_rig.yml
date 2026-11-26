@@ -65,3 +65,10 @@ jobs:
           echo "PDF size: $(stat -c %s rig-books/${{ matrix.book }}.pdf) bytes"
           grep -E "^RESULT|^BYTES|FAIL" rig.log
           ! grep -q "BYTES TOO MANY" rig.log
+      - name: Sidecar and search costs (bytes read, ms)
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: |
+          PORT=5292 DIST=$PWD/rig-dist BOOKS=$PWD/rig-books node test/perf_rig/server.mjs &
+          sleep 2
+          PORT=5292 node test/perf_rig/costs.mjs ${{ matrix.book }} amar zebra

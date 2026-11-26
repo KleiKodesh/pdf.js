@@ -165,18 +165,22 @@ async function save(pdfDocument, fingerprint) {
  * `searchDirectAndStore`), and stores it when anything was added.
  * @param {PDFDocumentProxy} pdfDocument
  * @param {string} fingerprint
- * @param {{stepPages?: number, isCurrent?: () => boolean}} [options]
+ * @param {{stepPages?: number, isCurrent?: () => boolean,
+ *   pageBytesOnly?: boolean}} [options] With `pageBytesOnly`, only the page
+ *   byte map is built (random access; no page content is decoded).
  */
 async function ensureSidecar(pdfDocument, fingerprint, options = {}) {
-  const { stepPages = 20, isCurrent = () => true } = options;
+  const {
+    stepPages = 20,
+    isCurrent = () => true,
+    pageBytesOnly = false,
+  } = options;
   const stored = await PDFSidecarStore.get(fingerprint);
   const loaded =
     !!stored && (await pdfDocument.setSidecar(stored).catch(() => false));
-  if (
-    loaded &&
-    stored.pages.length === stored.numPages &&
-    [...stored.pages].every(Boolean)
-  ) {
+  const done = list =>
+    list?.length === stored.numPages && [...list].every(Boolean);
+  if (loaded && done(pageBytesOnly ? stored.pageBytes : stored.pages)) {
     return;
   }
   const idle = () =>
@@ -196,6 +200,7 @@ async function ensureSidecar(pdfDocument, fingerprint, options = {}) {
     const step = await pdfDocument.buildSidecar({
       fromPage,
       maxPages: stepPages,
+      pageBytesOnly,
     });
     fromPage = step.nextPage;
     if (step.reachedEnd) {
@@ -236,17 +241,38 @@ const idle = () =>
  * @param {PDFDocumentProxy} pdfDocument
  * @param {string} fingerprint
  * @param {{stepPages?: number, isCurrent?: () => boolean,
- *   onIndex?: (index: PdfTermIndex) => void}} [options]
+ *   onIndex?: (index: PdfTermIndex) => void, background?: boolean}}
+ *   [options] `background: false`: never read pages for the index; it grows
+ *   from the pages searches read anyway.
  * @returns {Promise<PdfTermIndex|null>}
  */
 async function ensureTextIndex(pdfDocument, fingerprint, options = {}) {
-  const { stepPages = 16, isCurrent = () => true, onIndex } = options;
+  const {
+    stepPages = 16,
+    isCurrent = () => true,
+    onIndex,
+    background = true,
+  } = options;
   const { numPages } = pdfDocument;
   let index = await PDFSidecarStore.getTextIndex(fingerprint);
   if (index?.numPages !== numPages) {
     index = new TextIndex(numPages);
   }
   onIndex?.(index);
+  if (!background) {
+    // No reading ahead: the index learns each page when a search extracts its
+    // text (PDFFindController adds it) and is stored shortly after.
+    let timer = null;
+    index.onPagesAdded = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (isCurrent()) {
+          PDFSidecarStore.setTextIndex(fingerprint, index).catch(() => {});
+        }
+      }, 2000);
+    };
+    return index;
+  }
   let added = 0;
   while (isCurrent() && !index.complete) {
     await idle();
