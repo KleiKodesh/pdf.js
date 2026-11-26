@@ -20,6 +20,8 @@
  * Every call is best effort: without IndexedDB the viewer just rebuilds.
  */
 
+/** @typedef {import("../src/display/api").PDFDocumentProxy} PDFDocumentProxy */
+
 import { decodeSidecar, encodeSidecar } from "./pdf_sidecar_codec.js";
 import {
   decodeTextIndex,
