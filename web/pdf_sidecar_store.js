@@ -52,13 +52,41 @@ async function run(mode, fn) {
   }
 }
 
+// The sidecar is stored gzipped (CompressionStream): subset-heavy files have
+// hundreds of similar font tables, which compress about 10x.
+function encode(data) {
+  const json = JSON.stringify(data, (k, v) =>
+    ArrayBuffer.isView(v) ? { $t: v.constructor.name, d: Array.from(v) } : v
+  );
+  return new Response(
+    new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))
+  ).arrayBuffer();
+}
+
+const TYPED = { Uint8Array, Uint32Array, Int16Array };
+
+async function decode(buffer) {
+  const json = await new Response(
+    new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"))
+  ).text();
+  return JSON.parse(json, (k, v) =>
+    v?.$t && TYPED[v.$t] ? TYPED[v.$t].from(v.d) : v
+  );
+}
+
 const PDFSidecarStore = {
-  get(fingerprint) {
-    return run("readonly", s => s.get(fingerprint));
+  async get(fingerprint) {
+    const buffer = await run("readonly", s => s.get(fingerprint));
+    try {
+      return buffer ? await decode(buffer) : null;
+    } catch {
+      return null;
+    }
   },
 
-  set(fingerprint, data) {
-    return run("readwrite", s => s.put(data, fingerprint));
+  async set(fingerprint, data) {
+    const buffer = await encode(data);
+    return run("readwrite", s => s.put(buffer, fingerprint));
   },
 
   delete(fingerprint) {
@@ -82,9 +110,16 @@ const PDFSidecarStore = {
   },
 };
 
+async function save(pdfDocument, fingerprint) {
+  try {
+    await PDFSidecarStore.set(fingerprint, await pdfDocument.getSidecar());
+  } catch {}
+}
+
 /**
- * Loads the document's stored sidecar into the worker, or builds it in small
- * steps while the viewer is idle and stores it once complete.
+ * Loads the document's stored sidecar into the worker, then completes it in
+ * small steps while the viewer is idle (a stored one may be partial, see
+ * `searchDirectAndStore`), and stores it when anything was added.
  * @param {PDFDocumentProxy} pdfDocument
  * @param {string} fingerprint
  * @param {{stepPages?: number, isCurrent?: () => boolean}} [options]
@@ -92,7 +127,13 @@ const PDFSidecarStore = {
 async function ensureSidecar(pdfDocument, fingerprint, options = {}) {
   const { stepPages = 20, isCurrent = () => true } = options;
   const stored = await PDFSidecarStore.get(fingerprint);
-  if (stored && (await pdfDocument.setSidecar(stored).catch(() => false))) {
+  const loaded =
+    !!stored && (await pdfDocument.setSidecar(stored).catch(() => false));
+  if (
+    loaded &&
+    stored.pages.length === stored.numPages &&
+    [...stored.pages].every(Boolean)
+  ) {
     return;
   }
   const idle = () =>
@@ -117,8 +158,20 @@ async function ensureSidecar(pdfDocument, fingerprint, options = {}) {
     }
   }
   if (isCurrent()) {
-    await PDFSidecarStore.set(fingerprint, await pdfDocument.getSidecar());
+    await save(pdfDocument, fingerprint);
   }
 }
 
-export { ensureSidecar, PDFSidecarStore };
+/**
+ * `searchDirect`, storing the sidecar when the batch indexed new pages, so a
+ * search on a fresh file completes the stored index too.
+ */
+async function searchDirectAndStore(pdfDocument, fingerprint, params) {
+  const result = await pdfDocument.searchDirect(params);
+  if (result.built.length) {
+    save(pdfDocument, fingerprint);
+  }
+  return result;
+}
+
+export { ensureSidecar, PDFSidecarStore, searchDirectAndStore };
