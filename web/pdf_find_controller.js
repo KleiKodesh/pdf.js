@@ -956,9 +956,16 @@ class PDFFindController {
     return matches;
   }
 
+  /** Whether the text index can rule pages out (it has indexed pages). */
+  get #indexInUse() {
+    return !!this.textIndex?.indexed.some(Boolean);
+  }
+
   #extractText() {
     // Perform text extraction once if this method is called multiple times.
-    if (this.textIndex) {
+    // An index that has no page yet (it learns from this search) changes
+    // nothing: all pages are read as without one.
+    if (this.#indexInUse) {
       // Extracted lazily, page by page, see #ensureExtractText.
       this.#textQueue ||= Promise.resolve();
       return;
@@ -1050,7 +1057,7 @@ class PDFFindController {
   #pagesRuledOut() {
     const index = this.textIndex;
     const { query, caseSensitive, entireWord, matchDiacritics } = this.#state;
-    if (!index || typeof query !== "string") {
+    if (!this.#indexInUse || typeof query !== "string") {
       return null;
     }
     try {
@@ -1233,10 +1240,7 @@ class PDFFindController {
           });
           continue;
         }
-        (this.textIndex
-          ? this.#ensureExtractText(i)
-          : this._extractTextPromises[i]
-        ).then(() => {
+        this.#ensureExtractText(i).then(() => {
           this._pendingFindMatches.delete(i);
           this.#calculateMatch(i);
         });
