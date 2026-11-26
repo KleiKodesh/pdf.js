@@ -33,7 +33,18 @@ jobs:
           npx eslint src/core/pdf_sidecar.js src/core/sidecar_find.js web/pdf_sidecar_codec.js
           src/core/worker.js src/display/api.js web/pdf_sidecar_store.js
           web/view_history.js web/app.js test/unit/pdf_sidecar_spec.js
-          test/sidecar_bench.mjs
+          test/sidecar_bench.mjs web/pdf_fm_index.js web/pdf_text_index.js
+          web/pdf_find_controller.js test/text_index_bench.mjs
+
+      - name: Text index parity + bench (FM index vs PDFFindController)
+        run: |
+          set -o pipefail
+          status=0
+          for f in synthetic test/pdfs/tracemonkey.pdf test/pdfs/ArabicCIDTrueType.pdf test/pdfs/basicapi.pdf test/pdfs/Type3WordSpacing.pdf test/pdfs/type3_advance.pdf test/pdfs/vertical.pdf test/pdfs/perf_text_cmap_mixed.pdf; do
+            node test/text_index_bench.mjs "$f" > ti.log 2>&1 || status=1
+            grep -E "^FILE|MISMATCH|^PARITY| default " ti.log
+          done
+          exit $status
 
       - name: Build generic
         run: npx gulp generic

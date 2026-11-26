@@ -437,6 +437,10 @@ class PDFFindController {
 
   #textQueue = null;
 
+  // Exact per-page counts from the text index for the current search (all
+  // pages indexed), so the total shows before the pages are read.
+  #indexCounts = null;
+
   /**
    * @param {PDFFindControllerOptions} options
    */
@@ -456,6 +460,15 @@ class PDFFindController {
      * @type {Function}
      */
     this.onIsPageVisible = null;
+
+    /**
+     * Optional full-text index of the document (see pdf_text_index.js): pages
+     * it rules out are not extracted nor searched, and text is extracted
+     * lazily, only for the pages a search needs.
+     * @type {import("./pdf_text_index.js").PdfTextIndex|null}
+     */
+    this.textIndex = null;
+    this.#indexCounts = null;
 
     this.#reset();
     eventBus.on("find", this.#onFind.bind(this), internalOpt);
@@ -590,6 +603,7 @@ class PDFFindController {
   }
 
   #reset() {
+    this.#indexCounts = null;
     this._highlightMatches = false;
     this._scrollMatches = false;
     this._pdfDocument = null;
@@ -780,7 +794,7 @@ class PDFFindController {
     return [isUnicode, query];
   }
 
-  #calculateMatch(pageIndex) {
+  #calculateMatch(pageIndex, ruledOut = false) {
     if (!this.#state) {
       return;
     }
@@ -788,8 +802,10 @@ class PDFFindController {
     if (query.length === 0) {
       return; // Do nothing: the matches should be wiped out already.
     }
-    const pageContent = this._pageContents[pageIndex];
-    const matcherResult = this.match(query, pageContent, pageIndex);
+    // A page the text index rules out has no match: its text isn't needed.
+    const matcherResult = ruledOut
+      ? []
+      : this.match(query, this._pageContents[pageIndex], pageIndex);
 
     const matches = (this._pageMatches[pageIndex] = []);
     const matchesLength = (this._pageMatchesLength[pageIndex] = []);
@@ -890,13 +906,64 @@ class PDFFindController {
 
   #extractText() {
     // Perform text extraction once if this method is called multiple times.
+    if (this.textIndex) {
+      // Extracted lazily, page by page, see #ensureExtractText.
+      this.#textQueue ||= Promise.resolve();
+      return;
+    }
     if (this._extractTextPromises.length > 0) {
+      // Pages left out while a text index was used are extracted now.
+      for (let i = 0, ii = this._linkService.pagesCount; i < ii; i++) {
+        this.#ensureExtractText(i);
+      }
       return;
     }
     this.#textExtracted = [];
     this.#textQueue = Promise.resolve();
     for (let i = 0, ii = this._linkService.pagesCount; i < ii; i++) {
       this.#queueExtractText(i);
+    }
+  }
+
+  #ensureExtractText(i) {
+    if (!this._extractTextPromises[i]) {
+      this.#textQueue ||= Promise.resolve();
+      this.#queueExtractText(i);
+    }
+    return this._extractTextPromises[i];
+  }
+
+  /**
+   * The pages the text index rules out for the current search (no match
+   * there): indexed pages it doesn't list.
+   */
+  #pagesRuledOut() {
+    const index = this.textIndex;
+    const { query, caseSensitive, entireWord, matchDiacritics } = this.#state;
+    if (!index || typeof query !== "string") {
+      return null;
+    }
+    try {
+      const { pages, exact, missing } = index.search({
+        query,
+        caseSensitive,
+        entireWord,
+        matchDiacritics,
+      });
+      if (exact && missing.length === 0) {
+        this.#indexCounts = new Map(pages.map(p => [p.pageIndex, p.count]));
+      }
+      const hit = new Set(pages.map(p => p.pageIndex));
+      const out = new Set();
+      for (let i = 0, ii = index.numPages; i < ii; i++) {
+        if (index.indexed[i] && !hit.has(i)) {
+          out.add(i);
+        }
+      }
+      return out;
+    } catch (ex) {
+      console.error("Text index search failed", ex);
+      return null;
     }
   }
 
@@ -1016,13 +1083,37 @@ class PDFFindController {
 
       this.#updateAllPages(); // Wipe out any previously highlighted matches.
 
-      for (let i = 0; i < numPages; i++) {
+      this.#indexCounts = null;
+      const ruledOut =
+        numPages === this.textIndex?.numPages ? this.#pagesRuledOut() : null;
+      if (this.#indexCounts) {
+        this.#updateUIResultsCount();
+      }
+      for (let k = 0; k < numPages; k++) {
+        // With an index, the pages are read from the current one on (in the
+        // search direction), so the first match shows first.
+        let i = k;
+        if (ruledOut) {
+          i = previous
+            ? (currentPageIndex - k + numPages) % numPages
+            : (currentPageIndex + k) % numPages;
+        }
         // Start finding the matches as soon as the text is extracted.
         if (this._pendingFindMatches.has(i)) {
           continue;
         }
         this._pendingFindMatches.add(i);
-        this._extractTextPromises[i].then(() => {
+        if (ruledOut?.has(i)) {
+          Promise.resolve().then(() => {
+            this._pendingFindMatches.delete(i);
+            this.#calculateMatch(i, /* ruledOut = */ true);
+          });
+          continue;
+        }
+        (this.textIndex
+          ? this.#ensureExtractText(i)
+          : this._extractTextPromises[i]
+        ).then(() => {
           this._pendingFindMatches.delete(i);
           this.#calculateMatch(i);
         });
@@ -1151,6 +1242,9 @@ class PDFFindController {
   }
 
   #onPagesEdited({ pagesMapper, type, pageNumbers }) {
+    // The text index follows the file's page order: not usable after an edit.
+    this.textIndex = null;
+    this.#indexCounts = null;
     if (this._extractTextPromises.length === 0) {
       return;
     }
@@ -1290,11 +1384,18 @@ class PDFFindController {
 
   #requestMatchesCount() {
     const { pageIdx, matchIdx } = this._selected;
+    const indexCounts = this.#indexCounts;
     let current = 0,
       total = this._matchesCountTotal;
+    if (indexCounts) {
+      total = 0;
+      for (const count of indexCounts.values()) {
+        total += count;
+      }
+    }
     if (matchIdx !== -1) {
       for (let i = 0; i < pageIdx; i++) {
-        current += this._pageMatches[i]?.length || 0;
+        current += this._pageMatches[i]?.length ?? (indexCounts?.get(i) || 0);
       }
       current += matchIdx + 1;
     }

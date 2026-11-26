@@ -64,6 +64,7 @@ import {
   version,
 } from "pdfjs-lib";
 import { AppOptions, OptionKind } from "./app_options.js";
+import { ensureSidecar, ensureTextIndex } from "./pdf_sidecar_store.js";
 import { EventBus, FirefoxEventBus } from "./event_utils.js";
 import { ExternalServices, initCom, MLManager } from "web-external_services";
 import {
@@ -77,7 +78,6 @@ import { CaretBrowsingMode } from "./caret_browsing.js";
 import { CommentManager } from "./comment_manager.js";
 import { DownloadManager } from "web-download_manager";
 import { EditorUndoBar } from "./editor_undo_bar.js";
-import { ensureSidecar } from "./pdf_sidecar_store.js";
 import { internalOpt } from "./internal_evt.js";
 import { OverlayManager } from "./overlay_manager.js";
 import { PasswordPrompt } from "./password_prompt.js";
@@ -1856,11 +1856,22 @@ const PDFViewerApplication = {
       })
       .catch(noopFn);
 
-    // Load or build the sidecar index once the pages are set up, in idle steps.
+    // Load or build the sidecar and the full-text index once the pages are
+    // set up, in idle steps; the find controller uses the index as it grows.
+    this.findController.textIndex = null;
+    const isCurrent = () => this.pdfDocument === pdfDocument;
     pagesPromise
       .then(() =>
-        ensureSidecar(pdfDocument, pdfDocument.fingerprints[0], {
-          isCurrent: () => this.pdfDocument === pdfDocument,
+        ensureSidecar(pdfDocument, pdfDocument.fingerprints[0], { isCurrent })
+      )
+      .then(() =>
+        ensureTextIndex(pdfDocument, pdfDocument.fingerprints[0], {
+          isCurrent,
+          onIndex: index => {
+            if (isCurrent()) {
+              this.findController.textIndex = index;
+            }
+          },
         })
       )
       .catch(noopFn);

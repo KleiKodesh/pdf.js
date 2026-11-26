@@ -21,6 +21,11 @@
  */
 
 import { decodeSidecar, encodeSidecar } from "./pdf_sidecar_codec.js";
+import {
+  decodeTextIndex,
+  encodeTextIndex,
+  PdfTextIndex,
+} from "./pdf_text_index.js";
 
 const DB_NAME = "pdfjs-sidecars";
 const STORE = "sidecars";
@@ -57,6 +62,26 @@ async function run(mode, fn) {
 // The sidecar is stored in its compact binary form (pdf_sidecar_codec.js),
 // deflate-raw compressed. Entries in any older form don't decode and are
 // simply rebuilt.
+function deflate(bytes) {
+  return new Response(
+    new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"))
+  ).arrayBuffer();
+}
+
+async function inflate(buffer) {
+  return new Uint8Array(
+    await new Response(
+      new Blob([buffer])
+        .stream()
+        .pipeThrough(new DecompressionStream("deflate-raw"))
+    ).arrayBuffer()
+  );
+}
+
+// The full-text index (pdf_text_index.js) is stored next to the sidecar, in
+// the same store, under the fingerprint + this suffix.
+const TEXT_KEY = "#text";
+
 function encode(data) {
   return new Response(
     new Blob([encodeSidecar(data)])
@@ -89,7 +114,27 @@ const PDFSidecarStore = {
     return run("readwrite", s => s.put(buffer, fingerprint));
   },
 
-  delete: fingerprint => run("readwrite", s => s.delete(fingerprint)),
+  delete: fingerprint =>
+    run("readwrite", s => {
+      s.delete(fingerprint + TEXT_KEY);
+      return s.delete(fingerprint);
+    }),
+
+  async getTextIndex(fingerprint) {
+    const buffer = await run("readonly", s => s.get(fingerprint + TEXT_KEY));
+    try {
+      return buffer
+        ? PdfTextIndex.fromJSON(decodeTextIndex(await inflate(buffer)))
+        : null;
+    } catch {
+      return null;
+    }
+  },
+
+  async setTextIndex(fingerprint, index) {
+    const buffer = await deflate(encodeTextIndex(index.toJSON()));
+    return run("readwrite", s => s.put(buffer, fingerprint + TEXT_KEY));
+  },
 
   /** Deletes every sidecar whose fingerprint is not in `fingerprints`. */
   retainOnly(fingerprints) {
@@ -98,7 +143,7 @@ const PDFSidecarStore = {
       const req = s.getAllKeys();
       req.onsuccess = () => {
         for (const key of req.result) {
-          if (!keep.has(key)) {
+          if (!keep.has(String(key).replace(TEXT_KEY, ""))) {
             s.delete(key);
           }
         }
@@ -174,4 +219,67 @@ async function searchDirectAndStore(pdfDocument, fingerprint, params) {
   return result;
 }
 
-export { ensureSidecar, PDFSidecarStore, searchDirectAndStore };
+const idle = () =>
+  new Promise(resolve => {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(resolve, { timeout: 1000 });
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+
+/**
+ * Loads the document's stored full-text index, or builds it while the viewer
+ * is idle: `stepPages` pages at a time, their text as PDFFindController gets
+ * it, one index chunk per step (first-open model: the index grows; a search
+ * uses the indexed pages and reads the others itself). Stores it as it grows.
+ * @param {PDFDocumentProxy} pdfDocument
+ * @param {string} fingerprint
+ * @param {{stepPages?: number, isCurrent?: () => boolean,
+ *   onIndex?: (index: PdfTextIndex) => void}} [options]
+ * @returns {Promise<PdfTextIndex|null>}
+ */
+async function ensureTextIndex(pdfDocument, fingerprint, options = {}) {
+  const { stepPages = 16, isCurrent = () => true, onIndex } = options;
+  const { numPages } = pdfDocument;
+  let index = await PDFSidecarStore.getTextIndex(fingerprint);
+  if (index?.numPages !== numPages) {
+    index = new PdfTextIndex(numPages);
+  }
+  onIndex?.(index);
+  let added = 0;
+  while (isCurrent() && !index.complete) {
+    await idle();
+    const first = index.indexed.indexOf(0);
+    const texts = [];
+    for (let i = first; i < numPages && texts.length < stepPages; i++) {
+      if (index.indexed[i] || !isCurrent()) {
+        break;
+      }
+      let text = "";
+      try {
+        const page = await pdfDocument.getPage(i + 1);
+        text = PdfTextIndex.pageString(
+          await page.getTextContent({ disableNormalization: true })
+        );
+      } catch {}
+      texts.push(text);
+    }
+    if (!isCurrent()) {
+      return null;
+    }
+    await idle();
+    index.addPages(first, texts);
+    if (++added % 8 === 0 || index.complete) {
+      await PDFSidecarStore.setTextIndex(fingerprint, index).catch(() => {});
+    }
+  }
+  return index;
+}
+
+export {
+  ensureSidecar,
+  ensureTextIndex,
+  PDFSidecarStore,
+  searchDirectAndStore,
+};
