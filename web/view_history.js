@@ -13,6 +13,8 @@
  * limitations under the License.
  */
 
+import { PDFSidecarStore } from "./pdf_sidecar_store.js";
+
 const DEFAULT_VIEW_HISTORY_CACHE_SIZE = 20;
 
 /**
@@ -45,6 +47,8 @@ class ViewHistory {
       }
       this.file = database.files[index];
       this.database = database;
+      // A file's sidecar index lives as long as its view history entry.
+      PDFSidecarStore.retainOnly(database.files.map(f => f.fingerprint));
     });
   }
 

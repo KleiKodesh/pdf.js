@@ -77,6 +77,7 @@ import { CaretBrowsingMode } from "./caret_browsing.js";
 import { CommentManager } from "./comment_manager.js";
 import { DownloadManager } from "web-download_manager";
 import { EditorUndoBar } from "./editor_undo_bar.js";
+import { ensureSidecar } from "./pdf_sidecar_store.js";
 import { internalOpt } from "./internal_evt.js";
 import { OverlayManager } from "./overlay_manager.js";
 import { PasswordPrompt } from "./password_prompt.js";
@@ -1853,6 +1854,15 @@ const PDFViewerApplication = {
         scrollMode: ScrollMode.UNKNOWN,
         spreadMode: SpreadMode.UNKNOWN,
       })
+      .catch(noopFn);
+
+    // Load or build the sidecar index once the pages are set up, in idle steps.
+    pagesPromise
+      .then(() =>
+        ensureSidecar(pdfDocument, pdfDocument.fingerprints[0], {
+          isCurrent: () => this.pdfDocument === pdfDocument,
+        })
+      )
       .catch(noopFn);
 
     firstPagePromise.then(pdfPage => {
