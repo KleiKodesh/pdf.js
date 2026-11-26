@@ -26,6 +26,7 @@ import {
 import {
   arrayBuffersToBytes,
   getNewAnnotationsMap,
+  MissingDataException,
   XRefParseException,
 } from "./core_utils.js";
 import { Dict, isDict, Ref, RefMap } from "./primitives.js";
@@ -65,6 +66,10 @@ class WorkerTask {
     }
   }
 }
+
+// The documents open in this worker, by id: extractPages may copy pages of
+// one into another (a page source given as a document id).
+const openPdfManagers = new Map();
 
 class WorkerMessageHandler {
   static {
@@ -376,6 +381,7 @@ class WorkerMessageHandler {
             throw new Error("Worker was terminated");
           }
           pdfManager = newPdfManager;
+          openPdfManagers.set(docId, newPdfManager);
 
           pdfManager.requestLoadedStream(/* noFetch = */ true).then(stream => {
             handler.send("DataLoaded", { length: stream.bytes.byteLength });
@@ -593,6 +599,7 @@ class WorkerMessageHandler {
           pageInfos = [pageInfos];
         }
         let managers = null,
+          sourceManagers = null,
           newDocumentId = 0;
         const loadedSources = [];
         for (const pageInfo of pageInfos) {
@@ -601,6 +608,15 @@ class WorkerMessageHandler {
           }
           if (pageInfo.document === null) {
             pageInfo.document = pdfManager.pdfDocument;
+          } else if (typeof pageInfo.document === "string") {
+            // Another document open in this worker (see `openPdfManagers`).
+            const other = openPdfManagers.get(pageInfo.document);
+            if (other) {
+              (sourceManagers ??= new Set()).add(other);
+            } else {
+              warn("extractPages: the source document is not open.");
+            }
+            pageInfo.document = other?.pdfDocument ?? null;
           } else if (ArrayBuffer.isView(pageInfo.document)) {
             // The same file given in several entries (e.g. pages of it used
             // twice) is loaded once, so it's one source file for the editor.
@@ -675,18 +691,43 @@ class WorkerMessageHandler {
           const { PDFEditor } = await import(
             /* webpackChunkName: "editor" */ "./editor/pdf_editor.js"
           );
-          const pdfEditor = new PDFEditor();
-          pdfEditor.editedOutline = outline ?? null;
           task = new WorkerTask(`ExtractPages: ${pageInfos.length} page(s)`);
           startWorkerTask(task);
 
-          const data = await pdfEditor.extractPages(
-            pageInfos,
-            annotationStorage,
-            pdfManager.pdfDocument,
-            handler,
-            task
-          );
+          // A range-loaded document holds only the parts read so far. The
+          // editor loads what it copies (objects through fetchAsync, stream
+          // data up front); anything it still reads synchronously and finds
+          // missing is loaded here and the extraction runs again.
+          let pdfEditor,
+            data,
+            retries = 0;
+          while (true) {
+            pdfEditor = new PDFEditor();
+            pdfEditor.editedOutline = outline ?? null;
+            try {
+              data = await pdfEditor.extractPages(
+                pageInfos,
+                annotationStorage,
+                pdfManager.pdfDocument,
+                handler,
+                task
+              );
+              break;
+            } catch (ex) {
+              if (!(ex instanceof MissingDataException) || ++retries > 1000) {
+                throw ex;
+              }
+              // The exception does not say whose data was missing: every
+              // range-loaded source loads that range (a few chunks at most).
+              await Promise.all(
+                [pdfManager, ...(sourceManagers ?? [])]
+                  .filter(manager => manager instanceof NetworkPdfManager)
+                  .map(manager =>
+                    manager.requestRange(ex.begin, ex.end).catch(noopFn)
+                  )
+              );
+            }
+          }
           if (!data || !flatten) {
             return data;
           }
@@ -1338,6 +1379,7 @@ class WorkerMessageHandler {
 
     handler.on("Terminate", async function () {
       terminated = true;
+      openPdfManagers.delete(docId);
 
       const waitOn = [];
       if (pdfManager) {

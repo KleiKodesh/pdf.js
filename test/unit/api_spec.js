@@ -8505,6 +8505,109 @@ have written that much by now. So, here’s to squashing bugs.`);
       await loadingTask.destroy();
     });
 
+    // A range-loaded document (no auto fetch): `fetched` counts the bytes read.
+    async function openRangeLoaded(data) {
+      const counter = { fetched: 0 };
+      const transport = new PDFDataRangeTransport(data.length, null);
+      transport.requestDataRange = (begin, end) => {
+        counter.fetched += end - begin;
+        waitSome(() => {
+          transport.onDataRange(
+            begin,
+            new Uint8Array(data.subarray(begin, end))
+          );
+        });
+      };
+      const loadingTask = getDocument({
+        range: transport,
+        rangeChunkSize: 65536,
+        disableAutoFetch: true,
+        disableStream: true,
+      });
+      return { loadingTask, pdfDocument: await loadingTask.promise, counter };
+    }
+
+    async function pageText(data, pageNumber) {
+      const task = getDocument({ data });
+      const doc = await task.promise;
+      const page = await doc.getPage(pageNumber);
+      const { items } = await page.getTextContent();
+      const text = mergeText(items);
+      const { numPages } = doc;
+      await task.destroy();
+      return { text, numPages };
+    }
+
+    it("should extract pages of a range-loaded document reading only their data", async function () {
+      const data = await dataPromise;
+      const { loadingTask, pdfDocument, counter } = await openRangeLoaded(data);
+      expect(counter.fetched).toBeLessThan(data.length / 2);
+
+      const extracted = await pdfDocument.extractPages([
+        { document: null, includePages: [1] },
+      ]);
+      expect(extracted).not.toBeNull();
+      expect(counter.fetched).toBeLessThan(data.length);
+
+      const fullTask = getDocument({ data: new Uint8Array(data) });
+      const fullDoc = await fullTask.promise;
+      const expected = mergeText(
+        (await (await fullDoc.getPage(2)).getTextContent()).items
+      );
+      await fullTask.destroy();
+
+      const { text, numPages } = await pageText(extracted, 1);
+      expect(numPages).toEqual(1);
+      expect(text).toEqual(expected);
+
+      await loadingTask.destroy();
+    });
+
+    it("should extract pages from another range-loaded document in the same worker", async function () {
+      const data = await dataPromise;
+      const worker = new PDFWorker({ name: "extract-from-other-document" });
+      const targetTask = getDocument({
+        ...buildGetDocumentParams("doc_1_3_pages.pdf"),
+        worker,
+      });
+      const target = await targetTask.promise;
+
+      const counter = { fetched: 0 };
+      const transport = new PDFDataRangeTransport(data.length, null);
+      transport.requestDataRange = (begin, end) => {
+        counter.fetched += end - begin;
+        waitSome(() => {
+          transport.onDataRange(
+            begin,
+            new Uint8Array(data.subarray(begin, end))
+          );
+        });
+      };
+      const sourceTask = getDocument({
+        range: transport,
+        rangeChunkSize: 65536,
+        disableAutoFetch: true,
+        disableStream: true,
+        worker,
+      });
+      const source = await sourceTask.promise;
+
+      const extracted = await target.extractPages([
+        { document: null, includePages: [0] },
+        { document: source, includePages: [1] },
+      ]);
+      expect(extracted).not.toBeNull();
+      expect(counter.fetched).toBeLessThan(data.length);
+
+      const first = await pageText(extracted, 1);
+      expect(first.numPages).toEqual(2);
+      expect(first.text).toEqual("Document 1:Page 1");
+
+      await sourceTask.destroy();
+      await targetTask.destroy();
+      worker.destroy();
+    });
+
     it("should fetch document info and page using only streaming", async function () {
       const initialDataLength = 80000; // Larger than `rangeChunkSize`, since otherwise it's pretty pointless.
       const subArrays = [];
