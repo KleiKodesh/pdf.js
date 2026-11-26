@@ -33,11 +33,11 @@ jobs:
           npx eslint src/core/pdf_sidecar.js src/core/sidecar_find.js web/pdf_sidecar_codec.js
           src/core/worker.js src/display/api.js web/pdf_sidecar_store.js
           web/view_history.js web/app.js test/unit/pdf_sidecar_spec.js
-          test/sidecar_bench.mjs web/pdf_fm_index.js web/pdf_text_index.js
+          test/sidecar_bench.mjs web/pdf_fm_index.js web/pdf_text_index.js web/pdf_term_index.js
           web/pdf_find_controller.js test/text_index_bench.mjs
           web/pdf_viewer.component.js
 
-      - name: Text index parity + bench (FM index vs PDFFindController)
+      - name: Text index parity + bench (FM and inverted index vs PDFFindController)
         run: |
           set -o pipefail
           status=0

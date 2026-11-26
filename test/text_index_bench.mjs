@@ -13,7 +13,8 @@
  * limitations under the License.
  */
 
-// FM text index (web/pdf_text_index.js): size, build/load time, search time
+// Text indexes (FM: web/pdf_text_index.js, inverted: web/pdf_term_index.js;
+// INDEXES=fm,terms picks them): size, build/load time, search time
 // and PARITY against the real PDFFindController on the same page texts, with
 // and without the index (the adapter), straight on the sources. Usage:
 //   node test/text_index_bench.mjs <file.pdf | synthetic> [<query> ...]
@@ -48,8 +49,8 @@ const { setVerbosityLevel } = await import("../src/shared/util.js");
 const { WorkerTask } = await import("../src/core/worker.js");
 const { EventBus } = await import("../web/event_utils.js");
 const { PDFFindController } = await import("../web/pdf_find_controller.js");
-const { PdfTextIndex, encodeTextIndex, decodeTextIndex } =
-  await import("../web/pdf_text_index.js");
+const { PdfTextIndex } = await import("../web/pdf_text_index.js");
+const { PdfTermIndex } = await import("../web/pdf_term_index.js");
 
 setVerbosityLevel(0);
 Math.sumPrecise ??= values => values.reduce((a, b) => a + b, 0);
@@ -247,32 +248,41 @@ const extractMs = ms(t);
 
 // Build in chunks (the viewer's idle steps).
 const CHUNK = +(process.env.CHUNK_PAGES || 16);
-const index = new PdfTextIndex(numPages);
 const raw = contents.map(c => PdfTextIndex.pageString(c));
 const chars = raw.reduce((a, s) => a + s.length, 0);
-t = performance.now();
-let maxStepMs = 0;
-for (let p = 0; p < numPages; p += CHUNK) {
-  const t1 = performance.now();
-  index.addPages(p, raw.slice(p, p + CHUNK));
-  maxStepMs = Math.max(maxStepMs, ms(t1));
-}
-const buildMs = ms(t);
-const encoded = encodeTextIndex(index.toJSON());
-const stored = deflateRawSync(encoded, { level: 9 });
-t = performance.now();
-const loaded = PdfTextIndex.fromJSON(decodeTextIndex(inflateRawSync(stored)));
-const loadMs = ms(t);
 const pdfBytes = SYNTHETIC ? 1 : statSync(file).size;
 const name = file.split(/[/\\]/).pop();
-console.log(
-  `FILE ${name} pages=${numPages} pdfBytes=${pdfBytes} ` +
-    `textChars=${chars} getTextContentAllMs=${Math.round(extractMs)} ` +
-    `indexBuildMs=${Math.round(buildMs)} maxChunkMs=${Math.round(maxStepMs)} ` +
-    `storedBytes=${stored.length} (${((100 * stored.length) / pdfBytes).toFixed(2)}% of pdf) ` +
-    `rawBytes=${encoded.length} memBytes=${loaded.memoryBytes} loadMs=${Math.round(loadMs)} ` +
-    `chunks=${loaded.chunks.length}`
-);
+const KINDS = { fm: PdfTextIndex, terms: PdfTermIndex };
+const indexes = [];
+for (const kind of (process.env.INDEXES || "fm,terms").split(",")) {
+  const Cls = KINDS[kind];
+  const index = new Cls(numPages);
+  t = performance.now();
+  let maxStepMs = 0;
+  for (let p = 0; p < numPages; p += CHUNK) {
+    const t1 = performance.now();
+    index.addPages(p, raw.slice(p, p + CHUNK));
+    maxStepMs = Math.max(maxStepMs, ms(t1));
+  }
+  const buildMs = ms(t);
+  t = performance.now();
+  const encoded = index.encode();
+  const stored = deflateRawSync(encoded, { level: 9 });
+  const encodeMs = ms(t);
+  t = performance.now();
+  const loaded = Cls.decode(inflateRawSync(stored));
+  const loadMs = ms(t);
+  console.log(
+    `FILE ${name} index=${kind} pages=${numPages} pdfBytes=${pdfBytes} ` +
+      `textChars=${chars} getTextContentAllMs=${Math.round(extractMs)} ` +
+      `indexBuildMs=${Math.round(buildMs)} maxChunkMs=${Math.round(maxStepMs)} ` +
+      `encodeMs=${Math.round(encodeMs)} ` +
+      `storedBytes=${stored.length} (${((100 * stored.length) / pdfBytes).toFixed(2)}% of pdf) ` +
+      `rawBytes=${encoded.length} memBytes=${loaded.memoryBytes} loadMs=${Math.round(loadMs)}` +
+      (loaded.chunks ? ` chunks=${loaded.chunks.length}` : "")
+  );
+  indexes.push({ kind, loaded });
+}
 
 // The reference: PDFFindController itself on the same text contents.
 const eventBus = new EventBus();
@@ -287,7 +297,7 @@ ctrl.setDocument({
 // pages the index doesn't rule out. A fresh one per query counts them.
 let extracted = 0,
   adapterTotal = 0;
-function adapterController() {
+function adapterController(loaded) {
   const bus = new EventBus();
   const c = new PDFFindController({ linkService, eventBus: bus, delay: 0 });
   bus.on("updatefindmatchescount", e => {
@@ -351,55 +361,60 @@ for (const query of queries) {
     const refTotal = ref.reduce((a, b) => a + b, 0);
     const refPos = JSON.stringify([ctrl.pageMatches, ctrl.pageMatchesLength]);
 
-    const [ac, abus] = adapterController();
-    extracted = adapterTotal = 0;
-    await refSearch(query, opts, ac, abus);
-    const adapterOk =
-      JSON.stringify([ac.pageMatches, ac.pageMatchesLength]) === refPos &&
-      adapterTotal === refTotal;
-    const adapterPages = extracted;
+    for (const { kind, loaded } of indexes) {
+      const [ac, abus] = adapterController(loaded);
+      extracted = adapterTotal = 0;
+      t = performance.now();
+      await refSearch(query, opts, ac, abus);
+      const adapterMs = ms(t);
+      const adapterOk =
+        JSON.stringify([ac.pageMatches, ac.pageMatchesLength]) === refPos &&
+        adapterTotal === refTotal;
+      const adapterPages = extracted;
 
-    t = performance.now();
-    const res = loaded.search({ query, ...opts });
-    const idxMs = ms(t);
-    const got = new Array(numPages).fill(0);
-    let ok;
-    if (res.exact) {
-      for (const p of res.pages) {
-        got[p.pageIndex] = p.count;
-      }
-      ok = got.every((c, i) => c === ref[i]);
-    } else {
-      const cand = new Set(res.pages.map(p => p.pageIndex));
-      ok = ref.every((c, i) => !c || cand.has(i));
-    }
-    checked++;
-    if (!adapterOk) {
-      ok = false;
-      console.log(
-        `  ADAPTER MISMATCH "${label(query)}" ${JSON.stringify(opts)} ` +
-          `total=${adapterTotal}/${refTotal}`
-      );
-    }
-    if (!ok) {
-      bad++;
-      const diff = [];
-      for (let i = 0; i < numPages && diff.length < 5; i++) {
-        if (res.exact ? got[i] !== ref[i] : ref[i] && !got[i]) {
-          diff.push(`p${i + 1}:${got[i]}/${ref[i]}`);
+      t = performance.now();
+      const res = loaded.search({ query, ...opts });
+      const idxMs = ms(t);
+      const got = new Array(numPages).fill(0);
+      let ok;
+      if (res.exact) {
+        for (const p of res.pages) {
+          got[p.pageIndex] = p.count;
         }
+        ok = got.every((c, i) => c === ref[i]);
+      } else {
+        const cand = new Set(res.pages.map(p => p.pageIndex));
+        ok = ref.every((c, i) => !c || cand.has(i));
       }
-      console.log(
-        `  MISMATCH "${label(query)}" ${JSON.stringify(opts)} ${diff.join(" ")}`
+      checked++;
+      if (!adapterOk) {
+        ok = false;
+        console.log(
+          `  ADAPTER MISMATCH ${kind} "${label(query)}" ${JSON.stringify(opts)} ` +
+            `total=${adapterTotal}/${refTotal}`
+        );
+      }
+      if (!ok) {
+        bad++;
+        const diff = [];
+        for (let i = 0; i < numPages && diff.length < 5; i++) {
+          if (res.exact ? got[i] !== ref[i] : ref[i] && !got[i]) {
+            diff.push(`p${i + 1}:${got[i]}/${ref[i]}`);
+          }
+        }
+        console.log(
+          `  MISMATCH ${kind} "${label(query)}" ${JSON.stringify(opts)} ${diff.join(" ")}`
+        );
+      }
+      rows.push(
+        `  QUERY ${kind} "${label(query)}" ${Object.keys(opts).join(",") || "default"} ` +
+          `refHits=${refTotal} refPages=${ref.filter(Boolean).length} ` +
+          `index=${res.exact ? "exact" : "candidates"} idxPages=${res.pages.length} ` +
+          `idxMs=${idxMs} findMs=${refMs} adapterMs=${adapterMs} ` +
+          `adapterExtractedPages=${adapterPages}/${numPages} ` +
+          `${ok ? "OK" : "MISMATCH"}`
       );
     }
-    rows.push(
-      `  QUERY "${label(query)}" ${Object.keys(opts).join(",") || "default"} ` +
-        `refHits=${refTotal} refPages=${ref.filter(Boolean).length} ` +
-        `index=${res.exact ? "exact" : "candidates"} idxPages=${res.pages.length} ` +
-        `idxMs=${idxMs} findMs=${refMs} adapterExtractedPages=${adapterPages}/${numPages} ` +
-        `${ok ? "OK" : "MISMATCH"}`
-    );
   }
 }
 for (const r of rows) {

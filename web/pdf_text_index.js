@@ -569,6 +569,16 @@ class PdfTextIndex {
     return index;
   }
 
+  /** Compact binary form (deflate-raw it to store). */
+  encode() {
+    return encodeTextIndex(this.toJSON());
+  }
+
+  /** @returns {PdfTextIndex|null} */
+  static decode(buf) {
+    return PdfTextIndex.fromJSON(decodeTextIndex(buf));
+  }
+
   /** Bytes held in memory by the index structures (approximate). */
   get memoryBytes() {
     let b = 0;
@@ -702,6 +712,7 @@ function decodeTextIndex(buf) {
 }
 
 export {
+  canon,
   decodeTextIndex,
   encodeTextIndex,
   foldPage,

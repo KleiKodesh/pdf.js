@@ -34,6 +34,7 @@ import { PDFHistory } from "./pdf_history.js";
 import { PDFPageView } from "./pdf_page_view.js";
 import { PDFScriptingManager } from "./pdf_scripting_manager.component.js";
 import { PDFSinglePageViewer } from "./pdf_single_page_viewer.js";
+import { PdfTermIndex } from "./pdf_term_index.js";
 import { PdfTextIndex } from "./pdf_text_index.js";
 import { PDFViewer } from "./pdf_viewer.js";
 import { RenderingStates } from "./renderable_view.js";
@@ -57,6 +58,7 @@ globalThis.pdfjsViewer = {
   PDFScriptingManager,
   PDFSidecarStore,
   PDFSinglePageViewer,
+  PdfTermIndex,
   PdfTextIndex,
   PDFViewer,
   ProgressBar,
@@ -85,6 +87,7 @@ export {
   PDFScriptingManager,
   PDFSidecarStore,
   PDFSinglePageViewer,
+  PdfTermIndex,
   PdfTextIndex,
   PDFViewer,
   ProgressBar,

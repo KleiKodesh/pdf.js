@@ -23,11 +23,11 @@
 /** @typedef {import("../src/display/api").PDFDocumentProxy} PDFDocumentProxy */
 
 import { decodeSidecar, encodeSidecar } from "./pdf_sidecar_codec.js";
-import {
-  decodeTextIndex,
-  encodeTextIndex,
-  PdfTextIndex,
-} from "./pdf_text_index.js";
+import { PdfTermIndex } from "./pdf_term_index.js";
+
+// The find bar's page index: the inverted term index (pdf_term_index.js, the
+// smallest) by default; PdfTextIndex (FM index, exact counts) also fits.
+const TextIndex = PdfTermIndex;
 
 const DB_NAME = "pdfjs-sidecars";
 const STORE = "sidecars";
@@ -125,16 +125,14 @@ const PDFSidecarStore = {
   async getTextIndex(fingerprint) {
     const buffer = await run("readonly", s => s.get(fingerprint + TEXT_KEY));
     try {
-      return buffer
-        ? PdfTextIndex.fromJSON(decodeTextIndex(await inflate(buffer)))
-        : null;
+      return buffer ? TextIndex.decode(await inflate(buffer)) : null;
     } catch {
       return null;
     }
   },
 
   async setTextIndex(fingerprint, index) {
-    const buffer = await deflate(encodeTextIndex(index.toJSON()));
+    const buffer = await deflate(index.encode());
     return run("readwrite", s => s.put(buffer, fingerprint + TEXT_KEY));
   },
 
@@ -238,15 +236,15 @@ const idle = () =>
  * @param {PDFDocumentProxy} pdfDocument
  * @param {string} fingerprint
  * @param {{stepPages?: number, isCurrent?: () => boolean,
- *   onIndex?: (index: PdfTextIndex) => void}} [options]
- * @returns {Promise<PdfTextIndex|null>}
+ *   onIndex?: (index: PdfTermIndex) => void}} [options]
+ * @returns {Promise<PdfTermIndex|null>}
  */
 async function ensureTextIndex(pdfDocument, fingerprint, options = {}) {
   const { stepPages = 16, isCurrent = () => true, onIndex } = options;
   const { numPages } = pdfDocument;
   let index = await PDFSidecarStore.getTextIndex(fingerprint);
   if (index?.numPages !== numPages) {
-    index = new PdfTextIndex(numPages);
+    index = new TextIndex(numPages);
   }
   onIndex?.(index);
   let added = 0;
@@ -261,7 +259,7 @@ async function ensureTextIndex(pdfDocument, fingerprint, options = {}) {
       let text = "";
       try {
         const page = await pdfDocument.getPage(i + 1);
-        text = PdfTextIndex.pageString(
+        text = TextIndex.pageString(
           await page.getTextContent({ disableNormalization: true })
         );
       } catch {}

@@ -465,7 +465,8 @@ class PDFFindController {
      * Optional full-text index of the document (see pdf_text_index.js): pages
      * it rules out are not extracted nor searched, and text is extracted
      * lazily, only for the pages a search needs.
-     * @type {import("./pdf_text_index.js").PdfTextIndex|null}
+     * @type {import("./pdf_text_index.js").PdfTextIndex|
+     *   import("./pdf_term_index.js").PdfTermIndex|null}
      */
     this.textIndex = null;
     this.#indexCounts = null;
