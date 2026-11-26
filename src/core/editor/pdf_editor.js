@@ -164,6 +164,10 @@ class PDFEditor {
 
   currentDocument = null;
 
+  // Catalog entries kept from the primary document (see
+  // #collectCatalogEntries).
+  catalogEntries = new Map();
+
   oldPages = [];
 
   newPages = [];
@@ -646,19 +650,24 @@ class PDFEditor {
         continue;
       }
       if (isName(type, "OBJR")) {
-        if (!kidRef) {
-          continue;
-        }
         // Only keep the reference when its target was actually copied. A link
         // annotation targeting a removed page is dropped, so skip its OBJR.
         const oldObjRef = kid.getRaw("Obj");
         if (oldObjRef instanceof Ref && !oldRefMapping.get(oldObjRef)) {
           continue;
         }
-        const newKidRef =
-          oldRefMapping.get(kidRef) ||
-          (await this.#collectDependencies(kidRef, true, xref));
-        const newKid = this.xref[newKidRef.num];
+        // An OBJR written directly in /K (no object of its own) is kept too:
+        // dropping it would leave the annotation's /StructParent pointing at
+        // an element that no longer owns it.
+        let newKidRef, newKid;
+        if (kidRef) {
+          newKidRef =
+            oldRefMapping.get(kidRef) ||
+            (await this.#collectDependencies(kidRef, true, xref));
+          newKid = this.xref[newKidRef.num];
+        } else {
+          newKidRef = newKid = await this.#collectDependencies(kid, true, xref);
+        }
         // Fix the missing StructParent entry in the referenced object.
         const objRef = newKid.getRaw("Obj");
         if (objRef instanceof Ref) {
@@ -1167,6 +1176,7 @@ class PDFEditor {
     await this.#mergeAcroForms(allDocumentData);
     this.#buildOutline(allDocumentData);
     await this.#collectEmbeddedFiles(allDocumentData);
+    await this.#collectCatalogEntries(allDocumentData);
 
     return this.writePDF();
   }
@@ -2867,14 +2877,19 @@ class PDFEditor {
    */
   async #collectEmbeddedFiles(allDocumentData) {
     const { embeddedFiles } = this;
+    // A document used by several page infos (e.g. a page copied twice) has
+    // its attachments copied once.
+    const seenDocuments = new Set();
     for (const documentData of allDocumentData) {
       const {
         embeddedFiles: docEmbeddedFiles,
+        document,
         document: { xref },
       } = documentData;
-      if (!docEmbeddedFiles?.size) {
+      if (!docEmbeddedFiles?.size || seenDocuments.has(document)) {
         continue;
       }
+      seenDocuments.add(document);
       this.currentDocument = documentData;
       for (const [key, valueRef] of docEmbeddedFiles) {
         let name = key;
@@ -2897,6 +2912,45 @@ class PDFEditor {
         );
       }
       this.currentDocument = null;
+    }
+  }
+
+  /**
+   * Copy the catalog entries describing the whole document (language, tagged
+   * flag, XMP metadata, viewer preferences) from the primary document, or from
+   * the sole source file when the primary document isn't used.
+   * @param {Array<DocumentData>} allDocumentData
+   */
+  async #collectCatalogEntries(allDocumentData) {
+    const documentData =
+      allDocumentData.find(d => d.document === this.#primaryDocument) ||
+      this.#getSingleDocumentData();
+    const catalog = documentData?.document.xref.getCatalogObj();
+    if (!(catalog instanceof Dict)) {
+      return;
+    }
+    const { xref } = documentData.document;
+    this.currentDocument = documentData;
+    for (const key of ["Lang", "MarkInfo", "Metadata", "ViewerPreferences"]) {
+      const value = catalog.getRaw(key);
+      if (value !== undefined) {
+        this.catalogEntries.set(
+          key,
+          await this.#collectDependencies(value, true, xref)
+        );
+      }
+    }
+    this.currentDocument = null;
+  }
+
+  #makeCatalogEntries() {
+    const { rootDict } = this;
+    for (const [key, value] of this.catalogEntries) {
+      // /MarkInfo claims a structure tree: drop it when none is left.
+      if (key === "MarkInfo" && !rootDict.has("StructTreeRoot")) {
+        continue;
+      }
+      rootDict.set(key, value);
     }
   }
 
@@ -3050,6 +3104,7 @@ class PDFEditor {
     this.#makeDestinationsTree();
     this.#makeStructTree();
     await this.#makeOutline();
+    this.#makeCatalogEntries();
   }
 
   /**
@@ -3058,13 +3113,16 @@ class PDFEditor {
    */
   #makeInfo() {
     const infoMap = new Map();
-    if (this.isSingleFile) {
-      const firstRealPage = this.oldPages.find(p => !!p);
-      const {
-        xref: { trailer },
-      } = firstRealPage.documentData.document;
-      const oldInfoDict = trailer.get("Info");
-      for (const [key, value] of oldInfoDict || []) {
+    // The document info of the primary document (or of the sole source file)
+    // is kept as it is: the result is that document, edited. Only /ModDate
+    // changes.
+    const documentData =
+      this.oldPages.find(
+        p => p?.documentData.document === this.#primaryDocument
+      )?.documentData || this.#getSingleDocumentData();
+    const oldInfoDict = documentData?.document.xref.trailer.get("Info");
+    if (oldInfoDict instanceof Dict) {
+      for (const [key, value] of oldInfoDict) {
         if (typeof value === "string") {
           infoMap.set(key, stringToPDFString(value));
         }
@@ -3073,11 +3131,14 @@ class PDFEditor {
       for (const key of INFO_CONFORMANCE_KEYS) {
         infoMap.delete(key);
       }
+      infoMap.set("ModDate", `D:${getModificationDate()}`);
+    } else {
+      const now = `D:${getModificationDate()}`;
+      infoMap.set("CreationDate", now);
+      infoMap.set("ModDate", now);
+      infoMap.set("Creator", "PDF.js");
+      infoMap.set("Producer", "Firefox");
     }
-    infoMap.delete("ModDate");
-    infoMap.set("CreationDate", getModificationDate());
-    infoMap.set("Creator", "PDF.js");
-    infoMap.set("Producer", "Firefox");
 
     if (this.author) {
       infoMap.set("Author", this.author);

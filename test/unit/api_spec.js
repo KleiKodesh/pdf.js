@@ -11249,11 +11249,14 @@ small scripts as well as for`);
         let loadingTask = getDocument(buildGetDocumentParams("attachment.pdf"));
         let pdfDoc = await loadingTask.promise;
 
-        // Merge attachment.pdf with itself: both copies carry "foo.txt", so
-        // the second one should be deduplicated to "foo.txt_1".
+        // Merge attachment.pdf with another copy of the file: both carry
+        // "foo.txt", so the second one should be deduplicated to "foo.txt_1".
+        const otherData = await DefaultFileReaderFactory.fetch({
+          path: TEST_PDFS_PATH + "attachment.pdf",
+        });
         const data = await pdfDoc.extractPages([
           { document: null },
-          { document: null },
+          { document: otherData },
         ]);
         await loadingTask.destroy();
 
@@ -11299,7 +11302,7 @@ small scripts as well as for`);
         let pdfDoc = await loadingTask.promise;
         const data = await pdfDoc.extractPages([
           { document: null },
-          { document: null },
+          { document: assemblePdf(objects) },
         ]);
         await loadingTask.destroy();
 
@@ -11307,6 +11310,167 @@ small scripts as well as for`);
         pdfDoc = await loadingTask.promise;
         const attachments = await pdfDoc.getAttachments();
         expect(Array.from(attachments.keys()).sort()).toEqual(["名", "名_1"]);
+        await loadingTask.destroy();
+      });
+
+      it("copies the attachments once when a page is used twice", async function () {
+        let loadingTask = getDocument(buildGetDocumentParams("attachment.pdf"));
+        let pdfDoc = await loadingTask.promise;
+        const data = await pdfDoc.extractPages([
+          { document: null },
+          { document: null },
+        ]);
+        await loadingTask.destroy();
+
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        expect(pdfDoc.numPages).toEqual(2);
+        const attachments = await pdfDoc.getAttachments();
+        expect(Array.from(attachments.keys())).toEqual(["foo.txt"]);
+        await loadingTask.destroy();
+      });
+
+      it("keeps the catalog's Lang, MarkInfo, Metadata and ViewerPreferences", async function () {
+        const xmp =
+          '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF ' +
+          'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+          '<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">' +
+          "<dc:title><rdf:Alt><rdf:li>Kept</rdf:li></rdf:Alt></dc:title>" +
+          "</rdf:Description></rdf:RDF></x:xmpmeta>";
+        const objects = [
+          "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Lang (he-IL) " +
+            "/MarkInfo << /Marked true >> /Metadata 5 0 R " +
+            "/ViewerPreferences << /Direction /R2L /DisplayDocTitle true >> " +
+            "/StructTreeRoot 6 0 R >>\nendobj\n",
+          "2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n",
+          "3 0 obj\n<< /Type /Page /Parent 2 0 R /StructParents 0 " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+          "4 0 obj\n<< /Type /Page /Parent 2 0 R " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+          `5 0 obj\n<< /Type /Metadata /Subtype /XML /Length ${xmp.length} >>` +
+            `\nstream\n${xmp}\nendstream\nendobj\n`,
+          "6 0 obj\n<< /Type /StructTreeRoot /K 7 0 R /ParentTree 8 0 R " +
+            "/ParentTreeNextKey 1 >>\nendobj\n",
+          "7 0 obj\n<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 >>" +
+            "\nendobj\n",
+          "8 0 obj\n<< /Nums [0 [7 0 R]] >>\nendobj\n",
+        ];
+        let loadingTask = getDocument({ data: assemblePdf(objects) });
+        let pdfDoc = await loadingTask.promise;
+        let data = await pdfDoc.extractPages([
+          { document: null, includePages: [0, 1], pageIndices: [1, 0] },
+        ]);
+        await loadingTask.destroy();
+
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        const { info, metadata } = await pdfDoc.getMetadata();
+        expect(info.Language).toEqual("he-IL");
+        expect(metadata.get("dc:title")).toEqual("Kept");
+        expect(await pdfDoc.getMarkInfo()).toEqual(
+          jasmine.objectContaining({ Marked: true })
+        );
+        expect(await pdfDoc.getViewerPreferences()).toEqual({
+          Direction: "R2L",
+          DisplayDocTitle: true,
+        });
+        await loadingTask.destroy();
+
+        // Without a structure tree left, /MarkInfo goes; the rest stays.
+        loadingTask = getDocument({ data: assemblePdf(objects) });
+        pdfDoc = await loadingTask.promise;
+        data = await pdfDoc.extractPages([
+          { document: null, includePages: [1] },
+        ]);
+        await loadingTask.destroy();
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        expect(await pdfDoc.getMarkInfo()).toBeNull();
+        expect(await pdfDoc.getViewerPreferences()).toEqual({
+          Direction: "R2L",
+          DisplayDocTitle: true,
+        });
+        expect((await pdfDoc.getMetadata()).metadata.get("dc:title")).toEqual(
+          "Kept"
+        );
+        await loadingTask.destroy();
+      });
+
+      it("keeps the document info, updating only ModDate", async function () {
+        const objects = [
+          "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+          "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+          "3 0 obj\n<< /Type /Page /Parent 2 0 R " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+          "4 0 obj\n<< /Title (Test) /Creator (Orig Creator) " +
+            "/Producer (Orig Producer) /CreationDate (D:20200101000000Z) " +
+            "/ModDate (D:20200102000000Z) >>\nendobj\n",
+        ];
+        const loadingTask = getDocument({
+          data: assemblePdf(objects, "/Info 4 0 R "),
+        });
+        const pdfDoc = await loadingTask.promise;
+        const otherData = await DefaultFileReaderFactory.fetch({
+          path: TEST_PDFS_PATH + "tracemonkey.pdf",
+        });
+        // Also when pages of another file are added.
+        for (const pageInfos of [
+          [{ document: null }],
+          [{ document: null }, { document: otherData, includePages: [0] }],
+        ]) {
+          const data = await pdfDoc.extractPages(pageInfos);
+          const newLoadingTask = getDocument({ data });
+          const newPdfDoc = await newLoadingTask.promise;
+          const { info } = await newPdfDoc.getMetadata();
+          expect(info.Title).toEqual("Test");
+          expect(info.Creator).toEqual("Orig Creator");
+          expect(info.Producer).toEqual("Orig Producer");
+          expect(info.CreationDate).toEqual("D:20200101000000Z");
+          expect(info.ModDate).toMatch(/^D:\d{14}/);
+          expect(info.ModDate).not.toEqual("D:20200102000000Z");
+          await newLoadingTask.destroy();
+        }
+        await loadingTask.destroy();
+      });
+
+      it("keeps a direct OBJR child consistent with the ParentTree", async function () {
+        const objects = [
+          "1 0 obj\n<< /Type /Catalog /Pages 2 0 R " +
+            "/StructTreeRoot 4 0 R >>\nendobj\n",
+          "2 0 obj\n<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>\nendobj\n",
+          "3 0 obj\n<< /Type /Page /Parent 2 0 R /StructParents 0 " +
+            "/MediaBox [0 0 100 100] /Annots [8 0 R] >>\nendobj\n",
+          "4 0 obj\n<< /Type /StructTreeRoot /K [5 0 R] " +
+            "/ParentTree 7 0 R /ParentTreeNextKey 2 >>\nendobj\n",
+          "5 0 obj\n<< /Type /StructElem /S /Document /P 4 0 R " +
+            "/K 6 0 R >>\nendobj\n",
+          "6 0 obj\n<< /Type /StructElem /S /Link /P 5 0 R /Pg 3 0 R " +
+            "/K << /Type /OBJR /Obj 8 0 R /Pg 3 0 R >> >>\nendobj\n",
+          "7 0 obj\n<< /Nums [0 [6 0 R] 1 6 0 R] >>\nendobj\n",
+          "8 0 obj\n<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] " +
+            "/StructParent 1 /A << /S /URI /URI (https://example.com) >> >>" +
+            "\nendobj\n",
+          "9 0 obj\n<< /Type /Page /Parent 2 0 R " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+        ];
+        let loadingTask = getDocument({ data: assemblePdf(objects) });
+        let pdfDoc = await loadingTask.promise;
+        const data = await pdfDoc.extractPages([
+          { document: null, includePages: [0, 1], pageIndices: [1, 0] },
+        ]);
+        await loadingTask.destroy();
+
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        const page = await pdfDoc.getPage(2);
+        const [annotation] = await page.getAnnotations();
+        const tree = await page.getStructTree();
+        const link = tree.children[0].children[0];
+        expect(link.role).toEqual("Link");
+        expect(link.children[0]).toEqual({
+          type: "annotation",
+          id: annotation.id,
+        });
         await loadingTask.destroy();
       });
 
