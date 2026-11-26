@@ -22,6 +22,8 @@ import {
   countMatches,
   normalizeText,
 } from "../src/core/sidecar_find.js";
+import { deflateRawSync, gzipSync } from "node:zlib";
+import { encodeSidecar } from "../web/pdf_sidecar_codec.js";
 import { LocalPdfManager } from "../src/core/pdf_manager.js";
 import { PdfSidecar } from "../src/core/pdf_sidecar.js";
 import { readFileSync } from "node:fs";
@@ -60,10 +62,15 @@ let t = performance.now();
 await sidecar.build({ fromPage: 0, maxPages: numPages }, handler, task);
 const buildMs = ms(t);
 const data = serialize(sidecar.data);
+const json = JSON.stringify(sidecar.data, (k, v) =>
+  ArrayBuffer.isView(v) ? Array.from(v) : v
+);
+const packed = deflateRawSync(encodeSidecar(sidecar.data));
 console.log(
   `FILE ${file.split(/[/\\]/).pop()} pages=${numPages} ` +
     `bytes=${bytes.length} sidecarBuildMs=${buildMs} ` +
-    `sidecarBytes=${data.length} fonts=${sidecar.data.fonts.length}`
+    `sidecarBytes=${data.length} fonts=${sidecar.data.fonts.length} ` +
+    `storedJsonGzip=${gzipSync(json).length} storedBinDeflateRaw=${packed.length}`
 );
 
 // PDFFindController's first search: getTextContent of every page (fresh doc).

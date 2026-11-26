@@ -18,6 +18,7 @@ import {
   countMatches,
   normalizeText,
 } from "../../src/core/sidecar_find.js";
+import { decodeSidecar, encodeSidecar } from "../../web/pdf_sidecar_codec.js";
 import { buildGetDocumentParams } from "./test_utils.js";
 import { getDocument } from "../../src/display/api.js";
 
@@ -61,7 +62,11 @@ async function directCounts(pdfDocument, query, opts = {}, batch = 3) {
 
 describe("pdf_sidecar", function () {
   const CASES = [
-    ["tracemonkey.pdf", ["trace", "the", "JavaScript", "loop", "type"]],
+    // Incl. a word that isn't there and a phrase.
+    [
+      "tracemonkey.pdf",
+      ["trace", "the", "JavaScript", "loop", "type", "zebra", "trace tree"],
+    ],
     ["ArabicCIDTrueType.pdf", ["م", "ال"]],
     ["basicapi.pdf", ["Trace", "the"]],
     // Type3 fonts, vertical and mixed-length CMaps.
@@ -122,6 +127,10 @@ describe("pdf_sidecar", function () {
       }
     }
     expect(data.fonts.length).toBeGreaterThan(0);
+    // The stored binary form decodes to the same data.
+    const packed = encodeSidecar(data);
+    expect(packed.length).toBeLessThan(JSON.stringify(data).length / 3);
+    expect(decodeSidecar(packed)).toEqual(data);
     const expected = await directCounts(pdfDocument, "trace");
     await loadingTask.destroy();
 

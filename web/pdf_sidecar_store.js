@@ -20,6 +20,8 @@
  * Every call is best effort: without IndexedDB the viewer just rebuilds.
  */
 
+import { decodeSidecar, encodeSidecar } from "./pdf_sidecar_codec.js";
+
 const DB_NAME = "pdfjs-sidecars";
 const STORE = "sidecars";
 
@@ -52,26 +54,24 @@ async function run(mode, fn) {
   }
 }
 
-// The sidecar is stored gzipped (CompressionStream): subset-heavy files have
-// hundreds of similar font tables, which compress about 10x.
+// The sidecar is stored in its compact binary form (pdf_sidecar_codec.js),
+// deflate-raw compressed. Entries in any older form don't decode and are
+// simply rebuilt.
 function encode(data) {
-  const json = JSON.stringify(data, (k, v) =>
-    ArrayBuffer.isView(v) ? { $t: v.constructor.name, d: Array.from(v) } : v
-  );
   return new Response(
-    new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))
+    new Blob([encodeSidecar(data)])
+      .stream()
+      .pipeThrough(new CompressionStream("deflate-raw"))
   ).arrayBuffer();
 }
 
-const TYPED = { Uint8Array, Uint32Array, Int16Array };
-
 async function decode(buffer) {
-  const json = await new Response(
-    new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"))
-  ).text();
-  return JSON.parse(json, (k, v) =>
-    v?.$t && TYPED[v.$t] ? TYPED[v.$t].from(v.d) : v
-  );
+  const bytes = await new Response(
+    new Blob([buffer])
+      .stream()
+      .pipeThrough(new DecompressionStream("deflate-raw"))
+  ).arrayBuffer();
+  return decodeSidecar(new Uint8Array(bytes));
 }
 
 const PDFSidecarStore = {

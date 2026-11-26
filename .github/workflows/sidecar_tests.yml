@@ -30,7 +30,7 @@ jobs:
 
       - name: Lint the changed files
         run: >
-          npx eslint src/core/pdf_sidecar.js src/core/sidecar_find.js
+          npx eslint src/core/pdf_sidecar.js src/core/sidecar_find.js web/pdf_sidecar_codec.js
           src/core/worker.js src/display/api.js web/pdf_sidecar_store.js
           web/view_history.js web/app.js test/unit/pdf_sidecar_spec.js
           test/sidecar_bench.mjs
@@ -50,5 +50,5 @@ jobs:
       - name: Sidecar bench (build time/size, direct search vs getTextContent)
         run: |
           for f in tracemonkey.pdf ArabicCIDTrueType.pdf basicapi.pdf Type3WordSpacing.pdf type3_advance.pdf vertical.pdf perf_text_cmap_mixed.pdf; do
-            node test/sidecar_bench.mjs "test/pdfs/$f" the trace JavaScript "$(printf 'ال')"
+            node test/sidecar_bench.mjs "test/pdfs/$f" the trace JavaScript zebra "trace tree" "$(printf 'ال')"
           done
