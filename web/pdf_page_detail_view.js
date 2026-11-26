@@ -16,6 +16,7 @@
 import { BasePDFPageView } from "./base_pdf_page_view.js";
 import { OutputScale } from "pdfjs-lib";
 import { RenderingStates } from "./renderable_view.js";
+import { snapDetailSpan } from "./ui_utils.js";
 
 class PDFPageDetailView extends BasePDFPageView {
   #detailArea = null;
@@ -169,14 +170,36 @@ class PDFPageDetailView extends BasePDFPageView {
     const overflowWidth = visibleWidth * overflowScale;
     const overflowHeight = visibleHeight * overflowScale;
 
-    const minX = Math.max(0, visibleArea.minX - overflowWidth);
-    const maxX = Math.min(viewport.width, visibleArea.maxX + overflowWidth);
-    const minY = Math.max(0, visibleArea.minY - overflowHeight);
-    const maxY = Math.min(viewport.height, visibleArea.maxY + overflowHeight);
-    const width = maxX - minX;
-    const height = maxY - minY;
+    // Snapped outwards to whole device pixels of the page (see snapDetailSpan):
+    // the canvas is then shown 1:1, not resampled into a blur.
+    const { style: pageStyle } = this.pageView.div;
+    const { pixelRatio } = OutputScale;
+    const x = snapDetailSpan(
+      Math.max(0, visibleArea.minX - overflowWidth),
+      Math.min(viewport.width, visibleArea.maxX + overflowWidth),
+      viewport.width,
+      parseFloat(pageStyle.getPropertyValue("--scale-round-x")) || 1,
+      pixelRatio
+    );
+    const y = snapDetailSpan(
+      Math.max(0, visibleArea.minY - overflowHeight),
+      Math.min(viewport.height, visibleArea.maxY + overflowHeight),
+      viewport.height,
+      parseFloat(pageStyle.getPropertyValue("--scale-round-y")) || 1,
+      pixelRatio
+    );
+    const toViewportX = viewport.width / x.devLength;
+    const toViewportY = viewport.height / y.devLength;
 
-    this.#detailArea = { minX, minY, width, height, scale: viewport.scale };
+    this.#detailArea = {
+      minX: x.devMin * toViewportX,
+      minY: y.devMin * toViewportY,
+      width: (x.devMax - x.devMin) * toViewportX,
+      height: (y.devMax - y.devMin) * toViewportY,
+      scale: viewport.scale,
+      x,
+      y,
+    };
 
     this.reset({ keepCanvas: true });
   }
@@ -269,25 +292,24 @@ class PDFPageDetailView extends BasePDFPageView {
 
     const { width, height } = viewport;
 
-    const area = this.#detailArea;
-
-    const { pixelRatio } = OutputScale;
+    // In device pixels of the page's canvas wrapper (snapped in update).
+    const { x, y } = this.#detailArea;
     const transform = [
-      pixelRatio,
+      x.devLength / width,
       0,
       0,
-      pixelRatio,
-      -area.minX * pixelRatio,
-      -area.minY * pixelRatio,
+      y.devLength / height,
+      -x.devMin,
+      -y.devMin,
     ];
 
-    canvas.width = area.width * pixelRatio;
-    canvas.height = area.height * pixelRatio;
+    canvas.width = x.devMax - x.devMin;
+    canvas.height = y.devMax - y.devMin;
     const { style } = canvas;
-    style.width = `${(area.width * 100) / width}%`;
-    style.height = `${(area.height * 100) / height}%`;
-    style.top = `${(area.minY * 100) / height}%`;
-    style.left = `${(area.minX * 100) / width}%`;
+    style.width = `${(canvas.width * 100) / x.devLength}%`;
+    style.height = `${(canvas.height * 100) / y.devLength}%`;
+    style.top = `${(y.devMin * 100) / y.devLength}%`;
+    style.left = `${(x.devMin * 100) / x.devLength}%`;
 
     const renderingPromise = this._drawCanvas(
       this._getRenderingContext(canvas, transform),
