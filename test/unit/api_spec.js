@@ -9874,7 +9874,7 @@ small scripts as well as for`);
         loadingTask = getDocument({ data });
         const newPdfDoc = await loadingTask.promise;
         labels = await newPdfDoc.getPageLabels();
-        expect(labels).toEqual(["i", "ii", "1", "a", "5"]);
+        expect(labels).toEqual(["i", "ii", "2", "a", "5"]);
         await loadingTask.destroy();
       });
 
@@ -9909,7 +9909,320 @@ small scripts as well as for`);
         loadingTask = getDocument({ data });
         const newPdfDoc = await loadingTask.promise;
         const labels = await newPdfDoc.getPageLabels();
-        expect(labels).toEqual(["i", "ii", "3", "1"]);
+        expect(labels).toEqual(["i", "ii", "3", "2"]);
+        await loadingTask.destroy();
+      });
+    });
+
+    describe("Organizer fidelity", function () {
+      // Builds a PDF with `n` pages (catalog 1, pages tree 2, pages at 10 + i,
+      // contents at 30 + i); `extra` maps object numbers to object bodies.
+      function buildDoc({
+        n = 3,
+        catalog = "",
+        page = () => "",
+        content = i => `BT /F1 12 Tf 10 50 Td (Page ${i + 1}) Tj ET`,
+        extra = {},
+      }) {
+        const bodies = new Map();
+        const kids = [];
+        for (let i = 0; i < n; i++) {
+          kids.push(`${10 + i} 0 R`);
+          bodies.set(
+            10 + i,
+            `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] ` +
+              `/Contents ${30 + i} 0 R ${page(i)}>>`
+          );
+          const stream = content(i);
+          bodies.set(
+            30 + i,
+            `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+          );
+        }
+        bodies.set(1, `<< /Type /Catalog /Pages 2 0 R ${catalog}>>`);
+        bodies.set(
+          2,
+          `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${n} >>`
+        );
+        for (const [num, body] of Object.entries(extra)) {
+          bodies.set(+num, body);
+        }
+        const max = Math.max(...bodies.keys());
+        const objects = [];
+        for (let num = 1; num <= max; num++) {
+          objects.push(`${num} 0 obj\n${bodies.get(num) ?? "null"}\nendobj\n`);
+        }
+        return assemblePdf(objects);
+      }
+
+      async function extract(data, pageInfos) {
+        const loadingTask = getDocument({ data: data.slice() });
+        const pdfDoc = await loadingTask.promise;
+        const out = await pdfDoc.extractPages(pageInfos);
+        await loadingTask.destroy();
+        return out;
+      }
+
+      async function openDoc(data) {
+        const loadingTask = getDocument({ data });
+        return { loadingTask, pdfDoc: await loadingTask.promise };
+      }
+
+      async function outlinePages(pdfDoc) {
+        const result = [];
+        for (const { title, dest } of (await pdfDoc.getOutline()) || []) {
+          const explicit =
+            typeof dest === "string" ? await pdfDoc.getDestination(dest) : dest;
+          result.push([title, await pdfDoc.getPageIndex(explicit[0])]);
+        }
+        return result;
+      }
+
+      it("gives each reordered page its own structure entries", async function () {
+        const data = buildDoc({
+          catalog: "/StructTreeRoot 4 0 R /MarkInfo << /Marked true >> ",
+          page: i =>
+            `/StructParents ${i} ` + (i === 0 ? "/Annots [9 0 R] " : ""),
+          content: i => `/P << /MCID 0 >> BDC BT (Page ${i + 1}) Tj ET EMC`,
+          extra: {
+            4:
+              "<< /Type /StructTreeRoot /K [5 0 R 6 0 R 7 0 R] " +
+              "/ParentTree 8 0 R /ParentTreeNextKey 3 >>",
+            5: "<< /Type /StructElem /S /P /P 4 0 R /Pg 10 0 R /K 0 /Alt (A) >>",
+            6: "<< /Type /StructElem /S /P /P 4 0 R /Pg 11 0 R /K 0 /Alt (B) >>",
+            7: "<< /Type /StructElem /S /P /P 4 0 R /Pg 12 0 R /K 0 /Alt (C) >>",
+            8: "<< /Nums [0 [5 0 R] 1 [6 0 R] 2 [7 0 R]] >>",
+            // A link from page 1 to page 3.
+            9:
+              "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] " +
+              "/Dest [12 0 R /Fit] >>",
+          },
+        });
+        const out = await extract(data, [
+          { document: null, includePages: [0, 1, 2], pageIndices: [2, 1, 0] },
+        ]);
+        const { loadingTask, pdfDoc } = await openDoc(out);
+        const alts = [];
+        for (let i = 1; i <= 3; i++) {
+          const tree = await (await pdfDoc.getPage(i)).getStructTree();
+          alts.push(tree.children.map(child => child.alt).join(""));
+        }
+        expect(alts).toEqual(["C", "B", "A"]);
+        await loadingTask.destroy();
+      });
+
+      it("doesn't send another file's bookmark to a same-named destination", async function () {
+        const makeDoc = tag =>
+          buildDoc({
+            catalog: "/Outlines 4 0 R /Names << /Dests 7 0 R >> ",
+            content: i => `BT (${tag}${i + 1}) Tj ET`,
+            extra: {
+              4: "<< /Type /Outlines /First 5 0 R /Last 6 0 R /Count 2 >>",
+              5:
+                `<< /Title (${tag} first) /Parent 4 0 R /Next 6 0 R ` +
+                "/Dest [10 0 R /Fit] >>",
+              6:
+                `<< /Title (${tag} third) /Parent 4 0 R /Prev 5 0 R ` +
+                "/Dest (dest3) >>",
+              7: "<< /Names [(dest3) [12 0 R /Fit]] >>",
+            },
+          });
+        const a = makeDoc("A");
+        const b = makeDoc("B");
+        // The other file's page 3 isn't imported: its bookmark goes away.
+        let out = await extract(a, [
+          { document: null },
+          { document: b.slice(), includePages: [0] },
+        ]);
+        let { loadingTask, pdfDoc } = await openDoc(out);
+        expect(await outlinePages(pdfDoc)).toEqual([
+          ["A first", 0],
+          ["A third", 2],
+          ["B first", 3],
+        ]);
+        await loadingTask.destroy();
+
+        // Imported: the colliding name is renamed and both point right.
+        out = await extract(a, [
+          { document: null },
+          { document: b.slice(), includePages: [0, 2] },
+        ]);
+        ({ loadingTask, pdfDoc } = await openDoc(out));
+        expect(await outlinePages(pdfDoc)).toEqual([
+          ["A first", 0],
+          ["A third", 2],
+          ["B first", 3],
+          ["B third", 4],
+        ]);
+        await loadingTask.destroy();
+      });
+
+      const LABELS =
+        "/PageLabels << /Nums [0 << /S /r >> 1 << /S /D /St 5 >>] >> ";
+
+      it("keeps the page labels of merged files", async function () {
+        const a = buildDoc({ catalog: LABELS });
+        const b = buildDoc({
+          catalog: "/PageLabels << /Nums [0 << /S /A >>] >> ",
+        });
+        const c = buildDoc({ n: 2 });
+        const out = await extract(a, [
+          { document: null },
+          { document: b, includePages: [0, 1] },
+          { document: c },
+        ]);
+        const { loadingTask, pdfDoc } = await openDoc(out);
+        expect(await pdfDoc.getPageLabels()).toEqual([
+          "i",
+          "5",
+          "6",
+          "A",
+          "B",
+          "6",
+          "7",
+        ]);
+        await loadingTask.destroy();
+      });
+
+      it("moves each page's label with the page", async function () {
+        const data = buildDoc({ catalog: LABELS });
+        for (const [pageInfos, expected] of [
+          [
+            [
+              {
+                document: null,
+                includePages: [0, 1, 2],
+                pageIndices: [2, 1, 0],
+              },
+            ],
+            ["6", "5", "i"],
+          ],
+          [
+            [
+              {
+                document: null,
+                includePages: [0, 1, 2],
+                pageIndices: [0, 2, 3],
+              },
+              { document: null, includePages: [0], pageIndices: [1] },
+            ],
+            ["i", "i", "5", "6"],
+          ],
+        ]) {
+          const { loadingTask, pdfDoc } = await openDoc(
+            await extract(data, pageInfos)
+          );
+          expect(await pdfDoc.getPageLabels()).toEqual(expected);
+          await loadingTask.destroy();
+        }
+      });
+
+      it("keeps the page mode, the layout and the open action", async function () {
+        const data = buildDoc({
+          catalog:
+            "/PageMode /UseOutlines /PageLayout /TwoPageRight " +
+            "/OpenAction [11 0 R /Fit] ",
+        });
+        let out = await extract(data, [
+          { document: null, includePages: [0, 1, 2], pageIndices: [2, 0, 1] },
+        ]);
+        let { loadingTask, pdfDoc } = await openDoc(out);
+        expect(await pdfDoc.getPageMode()).toEqual("UseOutlines");
+        expect(await pdfDoc.getPageLayout()).toEqual("TwoPageRight");
+        const dest = (await pdfDoc.getOpenAction()).get("dest");
+        expect(await pdfDoc.getPageIndex(dest[0])).toEqual(0);
+        expect(dest[1]).toEqual({ name: "Fit" });
+        await loadingTask.destroy();
+
+        // The target page is gone: no open action.
+        out = await extract(data, [{ document: null, includePages: [0, 2] }]);
+        ({ loadingTask, pdfDoc } = await openDoc(out));
+        expect(await pdfDoc.getOpenAction()).toBeNull();
+        expect(await pdfDoc.getPageMode()).toEqual("UseOutlines");
+        await loadingTask.destroy();
+      });
+
+      it("keeps the layers used by the kept pages", async function () {
+        const data = buildDoc({
+          n: 2,
+          catalog:
+            "/OCProperties << /OCGs [4 0 R 5 0 R] /D << /OFF [4 0 R] " +
+            "/Order [4 0 R 5 0 R] >> >> ",
+          page: i => `/Resources << /Properties << /L ${4 + i} 0 R >> >> `,
+          content: i => `/OC /L BDC BT (Page ${i + 1}) Tj ET EMC`,
+          extra: {
+            4: "<< /Type /OCG /Name (Layer1) >>",
+            5: "<< /Type /OCG /Name (Layer2) >>",
+          },
+        });
+        const out = await extract(data, [
+          { document: null, includePages: [0] },
+        ]);
+        const { loadingTask, pdfDoc } = await openDoc(out);
+        const config = await pdfDoc.getOptionalContentConfig();
+        const groups = config.getOrder().map(id => config.getGroup(id));
+        expect(groups.map(g => [g.name, g.visible])).toEqual([
+          ["Layer1", false],
+        ]);
+        await loadingTask.destroy();
+      });
+
+      it("treats the same file given in several entries as one file", async function () {
+        const other = buildDoc({
+          n: 2,
+          catalog:
+            "/PageMode /UseOutlines /Outlines 6 0 R " +
+            "/OCProperties << /OCGs [4 0 R] /D << /OFF [4 0 R] >> >> ",
+          page: () => "/Resources << /Properties << /L 4 0 R >> >> ",
+          content: i => `/OC /L BDC BT (Page ${i + 1}) Tj ET EMC`,
+          extra: {
+            4: "<< /Type /OCG /Name (Layer1) >>",
+            6: "<< /Type /Outlines /First 7 0 R /Last 7 0 R /Count 1 >>",
+            7: "<< /Title (First) /Parent 6 0 R /Dest [10 0 R /Fit] >>",
+          },
+        });
+        const primary = buildDoc({ n: 1 });
+        // Page 1 of the other file used twice: two entries.
+        const out = await extract(primary, [
+          {
+            document: other.slice(),
+            includePages: [0, 1],
+            pageIndices: [0, 1],
+          },
+          { document: other.slice(), includePages: [0], pageIndices: [2] },
+        ]);
+        const { loadingTask, pdfDoc } = await openDoc(out);
+        expect(await pdfDoc.getPageMode()).toEqual("UseOutlines");
+        expect((await pdfDoc.getOutline()).map(i => i.title)).toEqual([
+          "First",
+        ]);
+        const config = await pdfDoc.getOptionalContentConfig();
+        expect(config.getOrder().length).toEqual(1);
+        await loadingTask.destroy();
+      });
+
+      it("doesn't link same-named form fields of merged files", async function () {
+        const data = buildDoc({
+          n: 1,
+          catalog: "/AcroForm << /Fields [4 0 R] >> ",
+          page: () => "/Annots [4 0 R] ",
+          extra: {
+            4:
+              "<< /Type /Annot /Subtype /Widget /FT /Tx /T (field1) " +
+              "/V (val) /Rect [10 10 50 30] /P 10 0 R >>",
+          },
+        });
+        const out = await extract(data, [
+          { document: null },
+          { document: data.slice() },
+        ]);
+        const { loadingTask, pdfDoc } = await openDoc(out);
+        const names = [];
+        for (let i = 1; i <= 2; i++) {
+          const [annotation] = await (await pdfDoc.getPage(i)).getAnnotations();
+          names.push(annotation.fieldName);
+        }
+        expect(names).toEqual(["field1", "field1+1"]);
         await loadingTask.destroy();
       });
     });
@@ -10637,6 +10950,7 @@ small scripts as well as for`);
 
         pdfPage = await pdfDoc.getPage(2);
         structTree = await pdfPage.getStructTree();
+        const [linkAnnotation] = await pdfPage.getAnnotations();
 
         expect(structTree).toEqual({
           children: [
@@ -10656,7 +10970,15 @@ small scripts as well as for`);
                       children: [
                         {
                           role: "Reference",
-                          children: [{ type: "content", id: "p23R_mc2" }],
+                          // The link is kept in this copy, so its annotation
+                          // stays in the structure tree.
+                          children: [
+                            { type: "content", id: "p23R_mc2" },
+                            {
+                              type: "annotation",
+                              id: `pdfjs_internal_id_${linkAnnotation.id}`,
+                            },
+                          ],
                           lang: "EN-US",
                         },
                         { type: "content", id: "p23R_mc3" },
@@ -11249,11 +11571,14 @@ small scripts as well as for`);
         let loadingTask = getDocument(buildGetDocumentParams("attachment.pdf"));
         let pdfDoc = await loadingTask.promise;
 
-        // Merge attachment.pdf with itself: both copies carry "foo.txt", so
-        // the second one should be deduplicated to "foo.txt_1".
+        // Merge attachment.pdf with another copy of the file: both carry
+        // "foo.txt", so the second one should be deduplicated to "foo.txt_1".
+        const otherData = await DefaultFileReaderFactory.fetch({
+          path: TEST_PDFS_PATH + "attachment.pdf",
+        });
         const data = await pdfDoc.extractPages([
           { document: null },
-          { document: null },
+          { document: otherData },
         ]);
         await loadingTask.destroy();
 
@@ -11299,7 +11624,7 @@ small scripts as well as for`);
         let pdfDoc = await loadingTask.promise;
         const data = await pdfDoc.extractPages([
           { document: null },
-          { document: null },
+          { document: assemblePdf(objects) },
         ]);
         await loadingTask.destroy();
 
@@ -11307,6 +11632,169 @@ small scripts as well as for`);
         pdfDoc = await loadingTask.promise;
         const attachments = await pdfDoc.getAttachments();
         expect(Array.from(attachments.keys()).sort()).toEqual(["名", "名_1"]);
+        await loadingTask.destroy();
+      });
+
+      it("copies the attachments once when a page is used twice", async function () {
+        let loadingTask = getDocument(buildGetDocumentParams("attachment.pdf"));
+        let pdfDoc = await loadingTask.promise;
+        const data = await pdfDoc.extractPages([
+          { document: null },
+          { document: null },
+        ]);
+        await loadingTask.destroy();
+
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        expect(pdfDoc.numPages).toEqual(2);
+        const attachments = await pdfDoc.getAttachments();
+        expect(Array.from(attachments.keys())).toEqual(["foo.txt"]);
+        await loadingTask.destroy();
+      });
+
+      it("keeps the catalog's Lang, MarkInfo, Metadata and ViewerPreferences", async function () {
+        const xmp =
+          '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF ' +
+          'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+          '<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">' +
+          "<dc:title><rdf:Alt><rdf:li>Kept</rdf:li></rdf:Alt></dc:title>" +
+          "</rdf:Description></rdf:RDF></x:xmpmeta>";
+        const objects = [
+          "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Lang (he-IL) " +
+            "/MarkInfo << /Marked true >> /Metadata 5 0 R " +
+            "/ViewerPreferences << /Direction /R2L /DisplayDocTitle true >> " +
+            "/StructTreeRoot 6 0 R >>\nendobj\n",
+          "2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n",
+          "3 0 obj\n<< /Type /Page /Parent 2 0 R /StructParents 0 " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+          "4 0 obj\n<< /Type /Page /Parent 2 0 R " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+          `5 0 obj\n<< /Type /Metadata /Subtype /XML /Length ${xmp.length} >>` +
+            `\nstream\n${xmp}\nendstream\nendobj\n`,
+          "6 0 obj\n<< /Type /StructTreeRoot /K 7 0 R /ParentTree 8 0 R " +
+            "/ParentTreeNextKey 1 >>\nendobj\n",
+          "7 0 obj\n<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 >>" +
+            "\nendobj\n",
+          "8 0 obj\n<< /Nums [0 [7 0 R]] >>\nendobj\n",
+        ];
+        let loadingTask = getDocument({ data: assemblePdf(objects) });
+        let pdfDoc = await loadingTask.promise;
+        let data = await pdfDoc.extractPages([
+          { document: null, includePages: [0, 1], pageIndices: [1, 0] },
+        ]);
+        await loadingTask.destroy();
+
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        const { info, metadata } = await pdfDoc.getMetadata();
+        expect(info.Language).toEqual("he-IL");
+        expect(metadata.get("dc:title")).toEqual("Kept");
+        expect((await pdfDoc.getMarkInfo()).get("Marked")).toBeTrue();
+        expect(await pdfDoc.getViewerPreferences()).toEqual(
+          new Map([
+            ["Direction", "R2L"],
+            ["DisplayDocTitle", true],
+          ])
+        );
+        await loadingTask.destroy();
+
+        // Without a structure tree left, /MarkInfo goes; the rest stays.
+        loadingTask = getDocument({ data: assemblePdf(objects) });
+        pdfDoc = await loadingTask.promise;
+        data = await pdfDoc.extractPages([
+          { document: null, includePages: [1] },
+        ]);
+        await loadingTask.destroy();
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        expect(await pdfDoc.getMarkInfo()).toBeNull();
+        expect(await pdfDoc.getViewerPreferences()).toEqual(
+          new Map([
+            ["Direction", "R2L"],
+            ["DisplayDocTitle", true],
+          ])
+        );
+        expect((await pdfDoc.getMetadata()).metadata.get("dc:title")).toEqual(
+          "Kept"
+        );
+        await loadingTask.destroy();
+      });
+
+      it("keeps the document info, updating only ModDate", async function () {
+        const objects = [
+          "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+          "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+          "3 0 obj\n<< /Type /Page /Parent 2 0 R " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+          "4 0 obj\n<< /Title (Test) /Creator (Orig Creator) " +
+            "/Producer (Orig Producer) /CreationDate (D:20200101000000Z) " +
+            "/ModDate (D:20200102000000Z) >>\nendobj\n",
+        ];
+        const loadingTask = getDocument({
+          data: assemblePdf(objects, "/Info 4 0 R "),
+        });
+        const pdfDoc = await loadingTask.promise;
+        const otherData = await DefaultFileReaderFactory.fetch({
+          path: TEST_PDFS_PATH + "tracemonkey.pdf",
+        });
+        // Also when pages of another file are added.
+        for (const pageInfos of [
+          [{ document: null }],
+          [{ document: null }, { document: otherData, includePages: [0] }],
+        ]) {
+          const data = await pdfDoc.extractPages(pageInfos);
+          const newLoadingTask = getDocument({ data });
+          const newPdfDoc = await newLoadingTask.promise;
+          const { info } = await newPdfDoc.getMetadata();
+          expect(info.Title).toEqual("Test");
+          expect(info.Creator).toEqual("Orig Creator");
+          expect(info.Producer).toEqual("Orig Producer");
+          expect(info.CreationDate).toEqual("D:20200101000000Z");
+          expect(info.ModDate).toMatch(/^D:\d{14}Z$/);
+          expect(info.ModDate).not.toEqual("D:20200102000000Z");
+          await newLoadingTask.destroy();
+        }
+        await loadingTask.destroy();
+      });
+
+      it("keeps a direct OBJR child consistent with the ParentTree", async function () {
+        const objects = [
+          "1 0 obj\n<< /Type /Catalog /Pages 2 0 R " +
+            "/StructTreeRoot 4 0 R >>\nendobj\n",
+          "2 0 obj\n<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>\nendobj\n",
+          "3 0 obj\n<< /Type /Page /Parent 2 0 R /StructParents 0 " +
+            "/MediaBox [0 0 100 100] /Annots [8 0 R] >>\nendobj\n",
+          "4 0 obj\n<< /Type /StructTreeRoot /K [5 0 R] " +
+            "/ParentTree 7 0 R /ParentTreeNextKey 2 >>\nendobj\n",
+          "5 0 obj\n<< /Type /StructElem /S /Document /P 4 0 R " +
+            "/K 6 0 R >>\nendobj\n",
+          "6 0 obj\n<< /Type /StructElem /S /Link /P 5 0 R /Pg 3 0 R " +
+            "/K << /Type /OBJR /Obj 8 0 R /Pg 3 0 R >> >>\nendobj\n",
+          "7 0 obj\n<< /Nums [0 [6 0 R] 1 6 0 R] >>\nendobj\n",
+          "8 0 obj\n<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] " +
+            "/StructParent 1 /A << /S /URI /URI (https://example.com) >> >>" +
+            "\nendobj\n",
+          "9 0 obj\n<< /Type /Page /Parent 2 0 R " +
+            "/MediaBox [0 0 100 100] >>\nendobj\n",
+        ];
+        let loadingTask = getDocument({ data: assemblePdf(objects) });
+        let pdfDoc = await loadingTask.promise;
+        const data = await pdfDoc.extractPages([
+          { document: null, includePages: [0, 1], pageIndices: [1, 0] },
+        ]);
+        await loadingTask.destroy();
+
+        loadingTask = getDocument({ data });
+        pdfDoc = await loadingTask.promise;
+        const page = await pdfDoc.getPage(2);
+        const [annotation] = await page.getAnnotations();
+        const tree = await page.getStructTree();
+        const link = tree.children[0].children[0];
+        expect(link.role).toEqual("Link");
+        expect(link.children[0]).toEqual({
+          type: "annotation",
+          id: `pdfjs_internal_id_${annotation.id}`,
+        });
         await loadingTask.destroy();
       });
 
@@ -12150,7 +12638,7 @@ small scripts as well as for`);
         await newLoadingTask.destroy();
       });
 
-      it("should merge outlines from two copies, cross-linking surviving dests", async function () {
+      it("should merge outlines from two copies, each name resolving in its own file", async function () {
         // Merge: page 1 (index 0) from copy A, page 3 (index 2) from copy B.
         // Named dests in the output: "page1dest" → merged page 1 (copy A p1),
         //                            "page3dest" → merged page 2 (copy B p3).
@@ -12158,15 +12646,13 @@ small scripts as well as for`);
         // Copy A contributes (page 1 kept):
         //   "Page 1 - explicit dest"  – explicit dest to kept page
         //   "External URL" / "Next Page action" / "Remote PDF link" – external
-        //   "Chapter" (dest=page1dest) with only child "Section 2"
-        //     Section 2 (dest=page3dest) survives because page3dest is valid
-        //     (points to copy B's page 3 in the merged doc).
+        //   "Chapter" (dest=page1dest), without children: its page3dest
+        //     points to copy A's page 3, which wasn't kept.
         //
         // Copy B contributes (page 3 kept):
         //   "External URL" / "Next Page action" / "Remote PDF link" – external
-        //   "Chapter" (dest=page1dest) with only child "Section 2"
-        //     Copy B's "Chapter" has dest=page1dest which happens to be valid
-        //     in the merged doc (copy A's page 1), so it cross-links there.
+        //   "Chapter" (no dest: copy B's page 1 wasn't kept) with only child
+        //     "Section 2" (dest=page3dest, copy B's page 3).
         const loadingTask = getDocument(
           buildGetDocumentParams("outlines_for_editor.pdf")
         );
@@ -12197,29 +12683,31 @@ small scripts as well as for`);
         expect(outline[2].title).toEqual("Next Page action");
         expect(outline[3].title).toEqual("Remote PDF link");
 
-        // "Chapter" from copy A: own dest (page1dest) is valid; the only
-        // surviving child is "Section 2" whose dest (page3dest) cross-links
-        // to copy B's page (merged page 2).
+        // "Chapter" from copy A: own dest (page1dest) is valid; its child
+        // "Section 2" (page3dest) is dropped: copy A's page 3 wasn't kept, and
+        // copy B's same-named destination belongs to the other file.
         const chapterA = outline[4];
         expect(chapterA.title).toEqual("Chapter");
         expect(typeof chapterA.dest).toEqual("string"); // page1dest
-        expect(chapterA.items.length).toEqual(1);
-        expect(chapterA.items[0].title).toEqual("Section 2");
-        expect(typeof chapterA.items[0].dest).toEqual("string"); // page3dest
+        expect(chapterA.items.length).toEqual(0);
 
         // ---- Copy B items ----
         expect(outline[5].title).toEqual("External URL");
         expect(outline[6].title).toEqual("Next Page action");
         expect(outline[7].title).toEqual("Remote PDF link");
 
-        // "Chapter" from copy B: its original dest (page1dest) resolves to
-        // copy A's page 1 after merging, so it is kept (cross-document link).
+        // "Chapter" from copy B: its dest (page1dest) points to copy B's
+        // page 1, which wasn't kept, so it stays only as the container of
+        // "Section 2" (page3dest, copy B's page 3 = merged page 2).
         const chapterB = outline[8];
         expect(chapterB.title).toEqual("Chapter");
-        expect(typeof chapterB.dest).toEqual("string"); // page1dest → copy A p1
+        expect(chapterB.dest).toBeNull();
         expect(chapterB.items.length).toEqual(1);
         expect(chapterB.items[0].title).toEqual("Section 2");
-        expect(typeof chapterB.items[0].dest).toEqual("string"); // page3dest
+        const section2Dest = await newPdfDoc.getDestination(
+          chapterB.items[0].dest
+        );
+        expect(await newPdfDoc.getPageIndex(section2Dest[0])).toEqual(1);
 
         // "Page 1 - explicit dest" from copy B should be absent (copy B's
         // page 1 was not kept).

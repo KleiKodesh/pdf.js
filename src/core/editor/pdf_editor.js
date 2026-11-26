@@ -164,6 +164,10 @@ class PDFEditor {
 
   currentDocument = null;
 
+  // Catalog entries kept from the primary document (see
+  // #collectCatalogEntries).
+  catalogEntries = new Map();
+
   oldPages = [];
 
   newPages = [];
@@ -215,6 +219,13 @@ class PDFEditor {
   outlineItems = null;
 
   embeddedFiles = new Map();
+
+  // Names of the top-level form fields already in the new document.
+  #topFieldNames = new Set();
+
+  // Copies of the layers (OCG dictionaries) per source document: a document
+  // used by several entries (e.g. duplicated pages) gets one copy of each.
+  #ocgCopies = new Map();
 
   constructor({ useObjectStreams = true, title = "", author = "" } = {}) {
     [this.rootRef, this.rootDict] = this.newDict;
@@ -310,8 +321,22 @@ class PDFEditor {
         );
       }
 
+      let ocgCopies = null;
+      if (isDict(obj, "OCG")) {
+        ocgCopies = this.#ocgCopies.getOrInsertComputed(
+          this.currentDocument.document,
+          () => new RefMap()
+        );
+        const copy = ocgCopies.get(oldRef);
+        if (copy) {
+          oldRefMapping.put(oldRef, copy);
+          return copy;
+        }
+      }
+
       const newRef = this.newRef;
       oldRefMapping.put(oldRef, newRef);
+      ocgCopies?.put(oldRef, newRef);
 
       if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
         if (isDict(obj, "Page") && !this.currentDocument.pagesMap.has(oldRef)) {
@@ -646,19 +671,24 @@ class PDFEditor {
         continue;
       }
       if (isName(type, "OBJR")) {
-        if (!kidRef) {
-          continue;
-        }
         // Only keep the reference when its target was actually copied. A link
         // annotation targeting a removed page is dropped, so skip its OBJR.
         const oldObjRef = kid.getRaw("Obj");
         if (oldObjRef instanceof Ref && !oldRefMapping.get(oldObjRef)) {
           continue;
         }
-        const newKidRef =
-          oldRefMapping.get(kidRef) ||
-          (await this.#collectDependencies(kidRef, true, xref));
-        const newKid = this.xref[newKidRef.num];
+        // An OBJR written directly in /K (no object of its own) is kept too:
+        // dropping it would leave the annotation's /StructParent pointing at
+        // an element that no longer owns it.
+        let newKidRef, newKid;
+        if (kidRef) {
+          newKidRef =
+            oldRefMapping.get(kidRef) ||
+            (await this.#collectDependencies(kidRef, true, xref));
+          newKid = this.xref[newKidRef.num];
+        } else {
+          newKidRef = newKid = await this.#collectDependencies(kid, true, xref);
+        }
         // Fix the missing StructParent entry in the referenced object.
         const objRef = newKid.getRaw("Obj");
         if (objRef instanceof Ref) {
@@ -1167,6 +1197,7 @@ class PDFEditor {
     await this.#mergeAcroForms(allDocumentData);
     this.#buildOutline(allDocumentData);
     await this.#collectEmbeddedFiles(allDocumentData);
+    await this.#collectCatalogEntries(allDocumentData);
 
     return this.writePDF();
   }
@@ -1383,6 +1414,19 @@ class PDFEditor {
   async #mergeStructTrees(allDocumentData) {
     let newStructParentId = 0;
     const { parentTree: newParentTree } = this;
+    // A dictionary reachable from several pages (e.g. a shared form XObject)
+    // is renumbered once; renumbering it again would read the new key as an
+    // old one.
+    const renumberedDicts = new Set();
+    // Each page gets its own StructParents key, also when the same source page
+    // is copied several times.
+    const pageKeys = new Set();
+    const newPageRefs = new RefSet();
+    for (const pageRef of this.newPages) {
+      if (pageRef) {
+        newPageRefs.put(pageRef);
+      }
+    }
     for (let i = 0, ii = this.newPages.length; i < ii; i++) {
       if (!this.oldPages[i]) {
         continue;
@@ -1401,13 +1445,18 @@ class PDFEditor {
       }
       const pageRef = this.newPages[i];
       const pageDict = this.xref[pageRef.num];
-      const visited = new RefSet();
-      visited.put(pageRef);
+      // Don't walk into the other pages (e.g. through a link destination):
+      // their keys belong to them and are renumbered on their own turn.
+      const visited = new RefSet(newPageRefs);
 
       // Visit the new page in order to collect used StructParent entries.
       this.#visitObject(
         pageDict,
         dict => {
+          if (renumberedDicts.has(dict)) {
+            return;
+          }
+          renumberedDicts.add(dict);
           const structParent =
             dict.get("StructParent") ?? dict.get("StructParents");
           if (typeof structParent !== "number") {
@@ -1434,10 +1483,19 @@ class PDFEditor {
             return;
           }
           let newStructParent = oldStructParentMapping.get(structParent);
-          if (newStructParent === undefined) {
+          const isPage = dict === pageDict;
+          if (
+            newStructParent === undefined ||
+            (isPage && pageKeys.has(newStructParent))
+          ) {
             newStructParent = newStructParentId++;
-            oldStructParentMapping.set(structParent, newStructParent);
+            if (!oldStructParentMapping.has(structParent)) {
+              oldStructParentMapping.set(structParent, newStructParent);
+            }
             newParentTree.set(newStructParent, [oldRefMapping, parent]);
+          }
+          if (isPage) {
+            pageKeys.add(newStructParent);
           }
           if (dict.has("StructParent")) {
             dict.set("StructParent", newStructParent);
@@ -1821,6 +1879,11 @@ class PDFEditor {
       return false;
     }
     if (typeof dest === "string") {
+      // The name must resolve in the item's own file: another file may use
+      // the same name for a page of its own.
+      if (!documentData.destinations?.has(dest)) {
+        return false;
+      }
       const name = documentData.dedupNamedDestinations.get(dest) || dest;
       return this.namedDestinations.has(name);
     }
@@ -2243,6 +2306,27 @@ class PDFEditor {
     } = this.currentDocument;
     const daToFix = [];
     const drToFix = [];
+    // A top-level field named like a field of an earlier source gets a "+N"
+    // suffix (as qpdf does), so the two don't become one linked field.
+    const takenNames = new Set(this.#topFieldNames);
+    const nameTopField = dict => {
+      const t = dict.get("T");
+      if (typeof t !== "string") {
+        return;
+      }
+      let name = stringToPDFString(t, /* keepEscapeSequence = */ false);
+      if (takenNames.has(name)) {
+        for (let i = 1; ; i++) {
+          const newName = `${name}+${i}`;
+          if (!this.#topFieldNames.has(newName)) {
+            name = newName;
+            break;
+          }
+        }
+        dict.set("T", stringToAsciiOrUTF16BE(name));
+      }
+      this.#topFieldNames.add(name);
+    };
 
     while (stack.length > 0) {
       const data = stack.at(-1);
@@ -2266,6 +2350,9 @@ class PDFEditor {
             const parentRef = (lastData.parentRef = this.newRef);
             parentDict.set("Parent", parentRef);
             oldRefMapping.put(lastData.oldParentRef, parentRef);
+          }
+          if (!lastData.parent) {
+            nameTopField(parentDict);
           }
           lastData.newKids.push(data.parentRef);
         }
@@ -2312,6 +2399,9 @@ class PDFEditor {
       const newKid = this.xref[newRef.num];
       if (data.parentRef) {
         newKid.set("Parent", data.parentRef);
+      }
+      if (!parent) {
+        nameTopField(newKid);
       }
       if (acroFormDefaultAppearance && !newKid.has("DA")) {
         // Fix the DA later since we need to have all the fields tree.
@@ -2393,65 +2483,80 @@ class PDFEditor {
     }
   }
 
-  async #collectPageLabels() {
-    // We can only preserve page labels when editing a single PDF file.
-    // This is consistent with behavior in Adobe Acrobat.
-    if (!this.isSingleFile) {
+  /**
+   * Compute the page labels of the new document. Each page keeps the label it
+   * had in its source file (a duplicate gets its source's label), so labels
+   * travel with the pages through reorders, copies and merges. Pages coming
+   * from a file without labels (and inserted images) are numbered by their
+   * position in the new document. Consecutive pages continuing the same
+   * numbering style are written as one range.
+   */
+  #collectPageLabels() {
+    const realPages = this.oldPages.filter(Boolean);
+    if (!realPages.some(p => p.documentData.pageLabels)) {
       return;
     }
-    const firstRealPage = this.oldPages.find(p => !!p);
-    if (!firstRealPage) {
-      return;
-    }
-    const {
-      documentData: { document, pageLabels },
-    } = firstRealPage;
-    if (!pageLabels) {
-      return;
-    }
-    const numPages = document.numPages;
-    const labelsByPageIndex = new Map();
-    const oldPageIndices = new Set(
-      this.oldPages.filter(Boolean).map(({ page: { pageIndex } }) => pageIndex)
-    );
-    let currentLabel = null;
-    let stFirstIndex = -1;
-    for (let i = 0; i < numPages; i++) {
-      const newLabel = pageLabels.get(i);
-      if (newLabel) {
-        currentLabel = newLabel;
-        stFirstIndex = currentLabel.has("St") ? i : -1;
+    const labelsByDocument = new Map();
+    const getSourceLabels = documentData => {
+      const { document, pageLabels } = documentData;
+      let labels = labelsByDocument.get(document);
+      if (labels) {
+        return labels;
       }
-      if (!oldPageIndices.has(i)) {
-        continue;
+      labels = [];
+      labelsByDocument.set(document, labels);
+      if (!pageLabels) {
+        return labels;
       }
-      if (stFirstIndex !== -1) {
-        const st = currentLabel.get("St");
-        currentLabel = this.cloneDict(currentLabel);
-        currentLabel.set("St", st + (i - stFirstIndex));
-        stFirstIndex = -1;
+      let style = null,
+        prefix = null,
+        start = 1,
+        rangeFirstIndex = 0;
+      for (let i = 0, ii = document.numPages; i < ii; i++) {
+        const labelDict = pageLabels.get(i);
+        if (labelDict instanceof Dict) {
+          const s = labelDict.get("S");
+          style = s instanceof Name ? s.name : null;
+          const p = labelDict.get("P");
+          prefix = typeof p === "string" ? p : null;
+          const st = labelDict.get("St");
+          start = Number.isInteger(st) && st >= 1 ? st : 1;
+          rangeFirstIndex = i;
+        }
+        labels.push({ style, prefix, number: start + (i - rangeFirstIndex) });
       }
-      labelsByPageIndex.set(i, currentLabel);
-    }
-
-    const defaultLabel = index => {
-      const label = new Dict();
-      label.setIfName("S", "D");
-      label.set("St", index + 1);
-      return label;
+      return labels;
     };
-    currentLabel = null;
+
     const newPageLabels = (this.pageLabels = []);
+    let previous = null;
     for (let i = 0, ii = this.oldPages.length; i < ii; i++) {
       const pageData = this.oldPages[i];
-      const label = pageData
-        ? labelsByPageIndex.get(pageData.page.pageIndex) || defaultLabel(i)
-        : defaultLabel(i);
-      if (label === currentLabel) {
+      const label = (pageData &&
+        getSourceLabels(pageData.documentData)[pageData.page.pageIndex]) || {
+        style: "D",
+        prefix: null,
+        number: i + 1,
+      };
+      if (
+        previous &&
+        label.style === previous.style &&
+        label.prefix === previous.prefix &&
+        label.number === previous.number + 1
+      ) {
+        previous = label;
         continue;
       }
-      currentLabel = label;
-      newPageLabels.push([i, currentLabel]);
+      previous = label;
+      const dict = new Dict();
+      dict.setIfName("S", label.style);
+      if (label.prefix !== null) {
+        dict.set("P", label.prefix);
+      }
+      if (label.number !== 1) {
+        dict.set("St", label.number);
+      }
+      newPageLabels.push([i, dict]);
     }
   }
 
@@ -2867,14 +2972,19 @@ class PDFEditor {
    */
   async #collectEmbeddedFiles(allDocumentData) {
     const { embeddedFiles } = this;
+    // A document used by several page infos (e.g. a page copied twice) has
+    // its attachments copied once.
+    const seenDocuments = new Set();
     for (const documentData of allDocumentData) {
       const {
         embeddedFiles: docEmbeddedFiles,
+        document,
         document: { xref },
       } = documentData;
-      if (!docEmbeddedFiles?.size) {
+      if (!docEmbeddedFiles?.size || seenDocuments.has(document)) {
         continue;
       }
+      seenDocuments.add(document);
       this.currentDocument = documentData;
       for (const [key, valueRef] of docEmbeddedFiles) {
         let name = key;
@@ -2897,6 +3007,215 @@ class PDFEditor {
         );
       }
       this.currentDocument = null;
+    }
+  }
+
+  /**
+   * Copy the catalog entries describing the whole document (language, tagged
+   * flag, XMP metadata, viewer preferences) from the primary document, or from
+   * the sole source file when the primary document isn't used.
+   * @param {Array<DocumentData>} allDocumentData
+   */
+  async #collectCatalogEntries(allDocumentData) {
+    const ocProperties = this.#makeOCProperties(allDocumentData);
+    if (ocProperties) {
+      this.catalogEntries.set("OCProperties", ocProperties);
+    }
+    const documentData =
+      allDocumentData.find(d => d.document === this.#primaryDocument) ||
+      this.#getSingleDocumentData();
+    const catalog = documentData?.document.xref.getCatalogObj();
+    if (!(catalog instanceof Dict)) {
+      return;
+    }
+    const { xref } = documentData.document;
+    this.currentDocument = documentData;
+    for (const key of ["Lang", "MarkInfo", "Metadata", "ViewerPreferences"]) {
+      const value = catalog.getRaw(key);
+      if (value !== undefined) {
+        this.catalogEntries.set(
+          key,
+          await this.#collectDependencies(value, true, xref)
+        );
+      }
+    }
+    this.currentDocument = null;
+
+    for (const key of ["PageMode", "PageLayout"]) {
+      const value = catalog.get(key);
+      if (value instanceof Name) {
+        this.catalogEntries.set(key, value);
+      }
+    }
+    const openAction = this.#makeOpenAction(
+      catalog,
+      documentData,
+      allDocumentData
+    );
+    if (openAction) {
+      this.catalogEntries.set("OpenAction", openAction);
+    }
+  }
+
+  /**
+   * Re-point the document's /OpenAction to its target page in the new
+   * document; null when that page wasn't kept (or the action doesn't go to a
+   * page of this document).
+   */
+  #makeOpenAction(catalog, documentData, allDocumentData) {
+    const openAction = catalog.get("OpenAction");
+    let dest = openAction;
+    if (openAction instanceof Dict) {
+      if (!isName(openAction.get("S"), "GoTo")) {
+        return null;
+      }
+      dest = openAction.get("D");
+    }
+    if (dest instanceof Name || typeof dest === "string") {
+      const name = stringToPDFString(
+        dest instanceof Name ? dest.name : dest,
+        /* keepEscapeSequence = */ true
+      );
+      dest = documentData.destinations?.get(name);
+    }
+    if (!Array.isArray(dest) || !(dest[0] instanceof Ref)) {
+      return null;
+    }
+    const { document } = documentData;
+    for (const data of allDocumentData) {
+      if (data.document === document && data.pagesMap.has(dest[0])) {
+        const newPageRef = data.oldRefMapping.get(dest[0]);
+        if (newPageRef) {
+          return [newPageRef, ...dest.slice(1)];
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Build /OCProperties from the optional content groups (layers) used by the
+   * kept pages: their copies are listed in /OCGs, and the default
+   * configuration keeps each layer's on/off state, the layers panel order,
+   * the locked layers and the radio-button groups.
+   * @param {Array<DocumentData>} allDocumentData
+   * @returns {Dict|null}
+   */
+  #makeOCProperties(allDocumentData) {
+    const ocgs = [];
+    const on = [];
+    const off = [];
+    const order = [];
+    const locked = [];
+    const rbGroups = [];
+    let configName = null;
+    const seen = new RefSet();
+    for (const { document, oldRefMapping } of allDocumentData) {
+      const ocProperties = document.xref.getCatalogObj()?.get("OCProperties");
+      if (!(ocProperties instanceof Dict)) {
+        continue;
+      }
+      const map = ref => {
+        const newRef = ref instanceof Ref && oldRefMapping.get(ref);
+        return newRef && this.xref[newRef.num] instanceof Dict ? newRef : null;
+      };
+      const config = ocProperties.get("D");
+      const configDict = config instanceof Dict ? config : new Dict();
+      const refSet = key => {
+        const set = new RefSet();
+        const array = configDict.get(key);
+        for (const ref of Array.isArray(array) ? array : []) {
+          if (ref instanceof Ref) {
+            set.put(ref);
+          }
+        }
+        return set;
+      };
+      const onSet = refSet("ON");
+      const offSet = refSet("OFF");
+      const baseOff = isName(configDict.get("BaseState"), "OFF");
+      const docOCGs = ocProperties.get("OCGs");
+      for (const ref of Array.isArray(docOCGs) ? docOCGs : []) {
+        const newRef = map(ref);
+        if (!newRef || seen.has(newRef)) {
+          continue;
+        }
+        seen.put(newRef);
+        ocgs.push(newRef);
+        const isOff = offSet.has(ref) || (baseOff && !onSet.has(ref));
+        (isOff ? off : on).push(newRef);
+      }
+      if (configName === null) {
+        const name = configDict.get("Name");
+        configName = typeof name === "string" ? name : "";
+      }
+      const mapOrder = array => {
+        const result = [];
+        for (const item of array) {
+          if (item instanceof Ref) {
+            const newRef = map(item);
+            if (newRef) {
+              result.push(newRef);
+            }
+          } else if (Array.isArray(item)) {
+            const sub = mapOrder(item);
+            if (sub.some(x => typeof x !== "string")) {
+              result.push(sub);
+            }
+          } else if (typeof item === "string") {
+            result.push(item);
+          }
+        }
+        return result;
+      };
+      const docOrder = configDict.get("Order");
+      if (Array.isArray(docOrder)) {
+        order.push(...mapOrder(docOrder).filter(x => typeof x !== "string"));
+      }
+      const docLocked = configDict.get("Locked");
+      for (const ref of Array.isArray(docLocked) ? docLocked : []) {
+        const newRef = map(ref);
+        if (newRef) {
+          locked.push(newRef);
+        }
+      }
+      const docRBGroups = configDict.get("RBGroups");
+      for (const group of Array.isArray(docRBGroups) ? docRBGroups : []) {
+        const newGroup = (Array.isArray(group) ? group : [])
+          .map(map)
+          .filter(Boolean);
+        if (newGroup.length > 1) {
+          rbGroups.push(newGroup);
+        }
+      }
+    }
+    if (ocgs.length === 0) {
+      return null;
+    }
+    const newConfig = new Dict();
+    if (configName) {
+      newConfig.set("Name", configName);
+    }
+    newConfig.setIfName("BaseState", "ON");
+    newConfig.set("ON", on);
+    newConfig.set("OFF", off);
+    newConfig.setIfArray("Order", order.length > 0 ? order : null);
+    newConfig.setIfArray("Locked", locked.length > 0 ? locked : null);
+    newConfig.setIfArray("RBGroups", rbGroups.length > 0 ? rbGroups : null);
+    const ocProperties = new Dict();
+    ocProperties.set("OCGs", ocgs);
+    ocProperties.set("D", newConfig);
+    return ocProperties;
+  }
+
+  #makeCatalogEntries() {
+    const { rootDict } = this;
+    for (const [key, value] of this.catalogEntries) {
+      // /MarkInfo claims a structure tree: drop it when none is left.
+      if (key === "MarkInfo" && !rootDict.has("StructTreeRoot")) {
+        continue;
+      }
+      rootDict.set(key, value);
     }
   }
 
@@ -3050,6 +3369,7 @@ class PDFEditor {
     this.#makeDestinationsTree();
     this.#makeStructTree();
     await this.#makeOutline();
+    this.#makeCatalogEntries();
   }
 
   /**
@@ -3058,13 +3378,16 @@ class PDFEditor {
    */
   #makeInfo() {
     const infoMap = new Map();
-    if (this.isSingleFile) {
-      const firstRealPage = this.oldPages.find(p => !!p);
-      const {
-        xref: { trailer },
-      } = firstRealPage.documentData.document;
-      const oldInfoDict = trailer.get("Info");
-      for (const [key, value] of oldInfoDict || []) {
+    // The document info of the primary document (or of the sole source file)
+    // is kept as it is: the result is that document, edited. Only /ModDate
+    // changes.
+    const documentData =
+      this.oldPages.find(
+        p => p?.documentData.document === this.#primaryDocument
+      )?.documentData || this.#getSingleDocumentData();
+    const oldInfoDict = documentData?.document.xref.trailer.get("Info");
+    if (oldInfoDict instanceof Dict) {
+      for (const [key, value] of oldInfoDict) {
         if (typeof value === "string") {
           infoMap.set(key, stringToPDFString(value));
         }
@@ -3073,11 +3396,14 @@ class PDFEditor {
       for (const key of INFO_CONFORMANCE_KEYS) {
         infoMap.delete(key);
       }
+      infoMap.set("ModDate", `D:${getModificationDate()}Z`);
+    } else {
+      const now = `D:${getModificationDate()}Z`;
+      infoMap.set("CreationDate", now);
+      infoMap.set("ModDate", now);
+      infoMap.set("Creator", "PDF.js");
+      infoMap.set("Producer", "Firefox");
     }
-    infoMap.delete("ModDate");
-    infoMap.set("CreationDate", getModificationDate());
-    infoMap.set("Creator", "PDF.js");
-    infoMap.set("Producer", "Firefox");
 
     if (this.author) {
       infoMap.set("Author", this.author);

@@ -124,6 +124,16 @@ const LAYERS_ORDER = new Map([
   ["xfaLayer", 3],
 ]);
 
+/** Least common multiple of two natural numbers. */
+function lcm(a, b) {
+  let x = a,
+    y = b;
+  while (y) {
+    [x, y] = [y, x % y];
+  }
+  return (a / x) * b;
+}
+
 class PDFPageView extends BasePDFPageView {
   #abortSignal = null;
 
@@ -134,6 +144,8 @@ class PDFPageView extends BasePDFPageView {
   #commentManager = null;
 
   #enableAutoLinking = true;
+
+  #layersRenderId = 0;
 
   #hasRestrictedScaling = false;
 
@@ -152,6 +164,10 @@ class PDFPageView extends BasePDFPageView {
   #sfx = [1, 1];
 
   #sfy = [1, 1];
+
+  #roundX = 1;
+
+  #roundY = 1;
 
   #textLayerMode = TextLayerMode.ENABLE;
 
@@ -826,19 +842,28 @@ class PDFPageView extends BasePDFPageView {
 
     const sfx = approximateFraction(outputScale.sx),
       sfy = approximateFraction(outputScale.sy);
-    if (this.#sfx[1] !== sfx[1]) {
-      if (sfx[1] !== 1) {
-        div.style.setProperty("--scale-round-x", `${sfx[1]}px`);
+    // The page's CSS size is rounded to whole canvas pixels (sfx) and, when
+    // the canvas is restricted (drawn below the screen's resolution), also to
+    // whole device pixels: the detail view's canvas is then placed and sized
+    // 1:1 on the screen (see snapDetailSpan).
+    const [, screenRound] = approximateFraction(OutputScale.pixelRatio);
+    const roundX = lcm(sfx[1], screenRound),
+      roundY = lcm(sfy[1], screenRound);
+    if (this.#roundX !== roundX) {
+      if (roundX !== 1) {
+        div.style.setProperty("--scale-round-x", `${roundX}px`);
       } else {
         div.style.removeProperty("--scale-round-x");
       }
+      this.#roundX = roundX;
     }
-    if (this.#sfy[1] !== sfy[1]) {
-      if (sfy[1] !== 1) {
-        div.style.setProperty("--scale-round-y", `${sfy[1]}px`);
+    if (this.#roundY !== roundY) {
+      if (roundY !== 1) {
+        div.style.setProperty("--scale-round-y", `${roundY}px`);
       } else {
         div.style.removeProperty("--scale-round-y");
       }
+      this.#roundY = roundY;
     }
     this.#sfx = sfx;
     this.#sfy = sfy;
@@ -856,6 +881,8 @@ class PDFPageView extends BasePDFPageView {
     cancelExtraDelay = 0,
   } = {}) {
     super.cancelRendering({ cancelExtraDelay });
+    // Stop any text/annotation layers still being built after the canvas.
+    this.#layersRenderId++;
 
     if (this.textLayer && (!keepTextLayer || !this.textLayer.div)) {
       this.textLayer.cancel();
@@ -991,12 +1018,73 @@ class PDFPageView extends BasePDFPageView {
     };
   }
 
+  async #renderLayersAfterCanvas(layersId, canvasWrapper) {
+    if (
+      layersId !== this.#layersRenderId ||
+      this.renderingState !== RenderingStates.FINISHED
+    ) {
+      // The rendering has been cancelled.
+      return;
+    }
+    const { l10n, pdfPage, viewport } = this;
+    this.structTreeLayer ||= new StructTreeLayerBuilder(
+      pdfPage,
+      viewport.rawDims
+    );
+
+    const textLayerPromise = this.textLayer ? this.#renderTextLayer() : null;
+
+    if (this.annotationLayer) {
+      await this.#renderAnnotationLayer(textLayerPromise);
+      if (layersId !== this.#layersRenderId) {
+        return; // The view was reset/redrawn meanwhile.
+      }
+    }
+
+    this.drawLayer ||= new DrawLayerBuilder({
+      pageIndex: this.id,
+      textLayer: this.enableSelectionRendering ? this.textLayer?.div : null,
+      filterFactory: this.pdfPage?.filterFactory,
+      pageColors: this.pageColors,
+    });
+    await this.#renderDrawLayer();
+    if (layersId !== this.#layersRenderId) {
+      return; // The view was reset/redrawn meanwhile.
+    }
+    this.drawLayer.setParent(canvasWrapper);
+
+    const { annotationEditorUIManager } = this.#layerProperties;
+
+    if (!annotationEditorUIManager) {
+      return;
+    }
+    if (
+      this.annotationLayer ||
+      this.#annotationMode === AnnotationMode.DISABLE
+    ) {
+      this.annotationEditorLayer ||= new AnnotationEditorLayerBuilder({
+        uiManager: annotationEditorUIManager,
+        pageIndex: this.id - 1,
+        l10n,
+        structTreeLayer: this.structTreeLayer,
+        accessibilityManager: this._accessibilityManager,
+        annotationLayer: this.annotationLayer?.annotationLayer,
+        textLayer: this.textLayer,
+        drawLayer: this.drawLayer.getDrawLayer(),
+        onAppend: annotationEditorLayerDiv => {
+          this.#addLayer(annotationEditorLayerDiv, "annotationEditorLayer");
+        },
+      });
+      this.#renderAnnotationEditorLayer();
+    }
+  }
+
   async draw() {
     if (this.renderingState !== RenderingStates.INITIAL) {
       console.error("Must be in new state before drawing");
       this.reset(); // Ensure that we reset all state to prevent issues.
     }
-    const { div, l10n, outputScale, pdfPage, viewport } = this;
+    const { div, outputScale, pdfPage, viewport } = this;
 
     if (!pdfPage) {
       this.renderingState = RenderingStates.FINISHED;
@@ -1124,56 +1212,18 @@ class PDFPageView extends BasePDFPageView {
           /* isDetailView */ false
         );
       }
-    ).then(async () => {
-      if (this.renderingState !== RenderingStates.FINISHED) {
-        // The rendering has been cancelled.
-        return;
-      }
-      this.structTreeLayer ||= new StructTreeLayerBuilder(
-        pdfPage,
-        viewport.rawDims
-      );
-
-      const textLayerPromise = this.textLayer ? this.#renderTextLayer() : null;
-
-      if (this.annotationLayer) {
-        await this.#renderAnnotationLayer(textLayerPromise);
-      }
-
-      this.drawLayer ||= new DrawLayerBuilder({
-        pageIndex: this.id,
-        textLayer: this.enableSelectionRendering ? this.textLayer?.div : null,
-        filterFactory: this.pdfPage?.filterFactory,
-        pageColors: this.pageColors,
-      });
-      await this.#renderDrawLayer();
-      this.drawLayer.setParent(canvasWrapper);
-
-      const { annotationEditorUIManager } = this.#layerProperties;
-
-      if (!annotationEditorUIManager) {
-        return;
-      }
-      if (
-        this.annotationLayer ||
-        this.#annotationMode === AnnotationMode.DISABLE
-      ) {
-        this.annotationEditorLayer ||= new AnnotationEditorLayerBuilder({
-          uiManager: annotationEditorUIManager,
-          pageIndex: this.id - 1,
-          l10n,
-          structTreeLayer: this.structTreeLayer,
-          accessibilityManager: this._accessibilityManager,
-          annotationLayer: this.annotationLayer?.annotationLayer,
-          textLayer: this.textLayer,
-          drawLayer: this.drawLayer.getDrawLayer(),
-          onAppend: annotationEditorLayerDiv => {
-            this.#addLayer(annotationEditorLayerDiv, "annotationEditorLayer");
-          },
-        });
-        this.#renderAnnotationEditorLayer();
-      }
-    });
+    );
+    // Build the text/annotation layers *after* the canvas is done, without
+    // holding up the rendering queue: the returned promise settles as soon as
+    // the page image is drawn, so the next page starts rendering right away.
+    const layersId = ++this.#layersRenderId;
+    resultPromise.then(
+      () =>
+        this.#renderLayersAfterCanvas(layersId, canvasWrapper).catch(reason => {
+          console.error("#renderLayersAfterCanvas:", reason);
+        }),
+      () => {} // The caller handles canvas rendering errors/cancellation.
+    );
 
     if (pdfPage.isPureXfa) {
       if (!this.xfaLayer) {

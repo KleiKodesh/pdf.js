@@ -924,6 +924,15 @@ class PDFViewer {
       this._pagesCapability.reject(new AbortException("Document was closed."));
 
       this._cancelRendering();
+      // `_cancelRendering` keeps built text layers (see there); the old
+      // document's pages go now, so cancel those too. A kept text layer stays
+      // registered on the viewer's abort signal and in TextLayerBuilder's
+      // selection map, which kept its page - and through it the whole closed
+      // document - alive for as long as the viewer lived.
+      for (const pageView of this._pages) {
+        pageView.textLayer?.cancel();
+        pageView.textLayer = null;
+      }
       this._resetView();
 
       this.findController?.setDocument(null);

@@ -289,6 +289,39 @@ function floorToDivide(x, div) {
 }
 
 /**
+ * Snaps a detail-view span [min, max] of a page (in viewport units) outwards
+ * to whole device pixels of the page's canvas wrapper, so the detail canvas is
+ * drawn 1:1 and starts on a device pixel (no resampling by the browser).
+ *
+ * The wrapper's CSS length is the viewport length rounded down to `cssRound`
+ * px (the page's --scale-round-x/y). The span is snapped to multiples of the
+ * smallest CSS length that is a whole number of device pixels (e.g. 4px = 5
+ * device pixels at 125%), so its CSS position is exact for the layout too.
+ * @param {number} min - Start of the span, in viewport units.
+ * @param {number} max - End of the span, in viewport units.
+ * @param {number} viewportLength - The page's viewport width or height.
+ * @param {number} cssRound - The page's CSS rounding step, in px.
+ * @param {number} pixelRatio - Device pixels per CSS pixel.
+ * @returns {object} `devMin`/`devMax`: the snapped span in device pixels of
+ *   the wrapper; `devLength`: the wrapper's length in device pixels.
+ */
+function snapDetailSpan(min, max, viewportLength, cssRound, pixelRatio) {
+  const cssLength = floorToDivide(viewportLength, cssRound || 1);
+  const devLength = Math.round(cssLength * pixelRatio);
+  const toDev = devLength / viewportLength;
+  const [gridDev] = approximateFraction(pixelRatio);
+  const devMin = Math.max(
+    0,
+    Math.floor((min * toDev + 1e-6) / gridDev) * gridDev
+  );
+  const devMax = Math.min(
+    devLength,
+    Math.ceil((max * toDev - 1e-6) / gridDev) * gridDev
+  );
+  return { devMin, devMax: Math.max(devMax, devMin), devLength };
+}
+
+/**
  * @typedef {object} GetPageSizeInchesParameters
  * @property {number[]} view
  * @property {number} userUnit
@@ -893,6 +926,7 @@ export {
   scrollIntoView,
   ScrollMode,
   SidebarView,
+  snapDetailSpan,
   SpreadMode,
   TextLayerMode,
   toggleCheckedBtn,

@@ -23,6 +23,7 @@ import {
   isValidRotation,
   parseQueryString,
   removeNullCharacters,
+  snapDetailSpan,
 } from "../../web/ui_utils.js";
 
 describe("ui_utils", function () {
@@ -634,6 +635,42 @@ describe("ui_utils", function () {
         ).toEqual(4);
       });
     });
+  });
+
+  describe("snapDetailSpan", function () {
+    // Every snapped span must be whole device pixels, start on a whole CSS
+    // pixel of the wrapper (exact for the layout) and cover the asked span.
+    for (const pixelRatio of [1, 1.25, 1.5, 1.75, 2]) {
+      it(`snaps outwards to whole device pixels at ${pixelRatio}`, function () {
+        const viewportLength = 1647.3871;
+        const cssRound = { 1: 1, 1.25: 4, 1.5: 2, 1.75: 4, 2: 1 }[pixelRatio];
+        for (const [min, max] of [
+          [0, 600.1],
+          [123.4567, 987.654],
+          [1000.01, viewportLength],
+        ]) {
+          const { devMin, devMax, devLength } = snapDetailSpan(
+            min,
+            max,
+            viewportLength,
+            cssRound,
+            pixelRatio
+          );
+          const cssLength = viewportLength - (viewportLength % cssRound);
+          expect(devLength).toEqual(Math.round(cssLength * pixelRatio));
+          expect(Number.isInteger(devMin)).toEqual(true);
+          expect(Number.isInteger(devMax)).toEqual(true);
+          const cssMin = devMin / pixelRatio;
+          expect(Math.abs(cssMin - Math.round(cssMin))).toBeLessThan(1e-9);
+          const toDev = devLength / viewportLength;
+          expect(devMin).toBeLessThanOrEqual(min * toDev + 1e-6);
+          expect(devMax).toBeGreaterThanOrEqual(
+            Math.min(max * toDev, devLength) - 1e-6
+          );
+          expect(devMax).toBeLessThanOrEqual(devLength);
+        }
+      });
+    }
   });
 
   describe("calcRound", function () {
