@@ -226,9 +226,7 @@ class StructTreeLayerBuilder {
    * @param {object} rawDims
    */
   constructor(pdfPage, rawDims) {
-    // Read only when rendered (or asked for by the annotation layer): the
-    // tree can be large and far from the page's own data in the file.
-    this.#promise = () => pdfPage.getStructTree();
+    this.#promise = pdfPage.getStructTree();
     this.#rawDims = rawDims;
   }
 
@@ -243,7 +241,7 @@ class StructTreeLayerBuilder {
     this.#treePromise = promise;
 
     try {
-      const tree = await this.#promise();
+      const tree = await this.#promise;
       this.#collectStructElements(tree);
       this.#collectAnnotations(tree);
       this.#treeDom = this.#walk(tree);

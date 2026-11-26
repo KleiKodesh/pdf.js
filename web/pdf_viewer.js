@@ -160,6 +160,12 @@ function isValidAnnotationEditorMode(mode) {
  *   The default value is `true`.
  * @property {boolean} [enableAutoLinking] - Enable creation of hyperlinks from
  *   text that look like URLs. The default value is `true`.
+ * @property {boolean} [enableStructTree] - Read the document's structure tree
+ *   (tagged-PDF accessibility: headings, paragraphs, reading order) for each
+ *   rendered page. The default value is `false`: showing pages, selecting
+ *   text and search don't need it, and it can be large and stored far from
+ *   the page's own data (under random access it held up the next page).
+ *   A feature that needs it should read it lazily, when that feature is used.
  * @property {number} [minDurationToUpdateCanvas] - Minimum duration to wait
  *   before updating the canvas. The default value is `500`.
  */
@@ -263,6 +269,8 @@ class PDFViewer {
   #enableNewAltTextWhenAddingImage = false;
 
   #enableAutoLinking = true;
+
+  #enableStructTree = false;
 
   #newTextLayerMode = 0;
 
@@ -390,6 +398,7 @@ class PDFViewer {
     this.#mlManager = options.mlManager || null;
     this.#supportsPinchToZoom = options.supportsPinchToZoom !== false;
     this.#enableAutoLinking = options.enableAutoLinking !== false;
+    this.#enableStructTree = options.enableStructTree === true;
     this.#newTextLayerMode = options.newTextLayerMode ?? 0;
     this.#minDurationToUpdateCanvas = options.minDurationToUpdateCanvas ?? 500;
 
@@ -1135,6 +1144,7 @@ class PDFViewer {
             l10n: this.l10n,
             layerProperties: this._layerProperties,
             enableAutoLinking: this.#enableAutoLinking,
+            enableStructTree: this.#enableStructTree,
             minDurationToUpdateCanvas: this.#minDurationToUpdateCanvas,
             commentManager: this.#commentManager,
             abortSignal: this.#abortSignal,
