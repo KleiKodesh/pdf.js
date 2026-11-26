@@ -114,8 +114,18 @@ describe("pdf_sidecar", function () {
     expect(step.complete).toEqual(true);
 
     const data = await pdfDocument.getSidecar();
-    expect(data.v).toEqual(1);
+    expect(data.v).toEqual(2);
     expect(data.pages.length).toEqual(14);
+    // Every page has its byte map: [start, length] pairs inside the file.
+    expect(data.pageBytes.length).toEqual(14);
+    for (const spans of data.pageBytes) {
+      expect(spans.length).toBeGreaterThan(0);
+      expect(spans.length % 2).toEqual(0);
+      for (let i = 0; i < spans.length; i += 2) {
+        expect(spans[i]).toBeGreaterThan(0);
+        expect(spans[i + 1]).toBeGreaterThan(0);
+      }
+    }
     for (const page of data.pages) {
       expect(page.c.length).toBeGreaterThan(0);
       for (const [num, gen, start, length, filters] of page.c) {
