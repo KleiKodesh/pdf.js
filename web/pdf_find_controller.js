@@ -418,6 +418,8 @@ function getOriginalIndex(diffs, pos, len) {
 // How many items back a copy of the same text drawn at the same place is
 // looked for, and how close (as a fraction of the font size) it must be.
 const DRAWN_COPY_LOOKBACK = 16;
+// How many pages' text content is kept for getPageTextContent.
+const TEXT_CONTENTS_KEPT = 64;
 const DRAWN_COPY_TOLERANCE = 0.15;
 
 /**
@@ -670,6 +672,7 @@ class PDFFindController {
     };
     this._extractTextPromises = [];
     this._pageContents = []; // Stores the normalized text for each page.
+    this.#textContents.clear();
     this._pageDiffs = [];
     this._hasDiacritics = [];
     this.#textGeneration++;
@@ -855,6 +858,9 @@ class PDFFindController {
 
     const matches = (this._pageMatches[pageIndex] = []);
     const matchesLength = (this._pageMatchesLength[pageIndex] = []);
+    if (!matcherResult?.length) {
+      this.#textContents.delete(pageIndex); // kept only for pages with hits
+    }
     const diffs = this._pageDiffs[pageIndex];
 
     matcherResult?.forEach(({ index, length }) => {
@@ -979,6 +985,27 @@ class PDFFindController {
     return this._extractTextPromises[i];
   }
 
+  // The text content of recently extracted pages that have matches, for the
+  // viewer's result snippets (getPageTextContent): one extraction for both.
+  #textContents = new Map();
+
+  #keepTextContent(pageIndex, textContent) {
+    this.#textContents.delete(pageIndex);
+    this.#textContents.set(pageIndex, textContent);
+    if (this.#textContents.size > TEXT_CONTENTS_KEPT) {
+      this.#textContents.delete(this.#textContents.keys().next().value);
+    }
+  }
+
+  /**
+   * The text content (`disableNormalization: true`) this controller extracted
+   * for a page with matches, if it still holds it; otherwise null.
+   * @param {number} pageIndex - zero-based.
+   */
+  getPageTextContent(pageIndex) {
+    return this.#textContents.get(pageIndex) ?? null;
+  }
+
   #indexQueue = [];
 
   #indexScheduled = false;
@@ -1075,6 +1102,7 @@ class PDFFindController {
       try {
         const pdfPage = await pdfDoc.getPage(i + 1);
         const textContent = await pdfPage.getTextContent(textOptions);
+        this.#keepTextContent(i, textContent);
 
         if (isStale()) {
           resolve();
