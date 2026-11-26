@@ -14,6 +14,7 @@
  */
 
 import {
+  ensureSidecar,
   ensureTextIndex,
   PDFSidecarStore,
 } from "../../web/pdf_sidecar_store.js";
@@ -48,6 +49,7 @@ import { XfaLayerBuilder } from "../../web/xfa_layer_builder.js";
 const expectedAPI = Object.freeze({
   AnnotationLayerBuilder,
   DownloadManager,
+  ensureSidecar,
   ensureTextIndex,
   EventBus,
   FindState,

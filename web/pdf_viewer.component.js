@@ -13,7 +13,11 @@
  * limitations under the License.
  */
 
-import { ensureTextIndex, PDFSidecarStore } from "./pdf_sidecar_store.js";
+import {
+  ensureSidecar,
+  ensureTextIndex,
+  PDFSidecarStore,
+} from "./pdf_sidecar_store.js";
 import { FindState, PDFFindController } from "./pdf_find_controller.js";
 import {
   LinkTarget,
@@ -45,6 +49,7 @@ import { XfaLayerBuilder } from "./xfa_layer_builder.js";
 globalThis.pdfjsViewer = {
   AnnotationLayerBuilder,
   DownloadManager,
+  ensureSidecar,
   ensureTextIndex,
   EventBus,
   FindState,
@@ -74,6 +79,7 @@ globalThis.pdfjsViewer = {
 export {
   AnnotationLayerBuilder,
   DownloadManager,
+  ensureSidecar,
   ensureTextIndex,
   EventBus,
   FindState,

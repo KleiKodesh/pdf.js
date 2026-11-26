@@ -433,7 +433,12 @@ class PdfSidecar {
     const entry = await this._container(refs, page.resources, evaluator, task);
     this.data.pages[pageIndex] = entry;
     try {
-      (this.data.pageBytes ||= [])[pageIndex] = this._pageBytes(page.ref);
+      // Through `ensure`: with range loading, missing objects are read first.
+      (this.data.pageBytes ||= [])[pageIndex] = await this.pdfManager.ensure(
+        this,
+        "_pageBytes",
+        [page.ref]
+      );
     } catch (ex) {
       warn(`PdfSidecar: page ${pageIndex + 1} bytes: ${ex}`);
     }
