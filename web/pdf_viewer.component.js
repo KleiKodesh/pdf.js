@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 
+import { ensureTextIndex, PDFSidecarStore } from "./pdf_sidecar_store.js";
 import { FindState, PDFFindController } from "./pdf_find_controller.js";
 import {
   LinkTarget,
@@ -33,6 +34,7 @@ import { PDFHistory } from "./pdf_history.js";
 import { PDFPageView } from "./pdf_page_view.js";
 import { PDFScriptingManager } from "./pdf_scripting_manager.component.js";
 import { PDFSinglePageViewer } from "./pdf_single_page_viewer.js";
+import { PdfTextIndex } from "./pdf_text_index.js";
 import { PDFViewer } from "./pdf_viewer.js";
 import { RenderingStates } from "./renderable_view.js";
 import { StructTreeLayerBuilder } from "./struct_tree_layer_builder.js";
@@ -42,6 +44,7 @@ import { XfaLayerBuilder } from "./xfa_layer_builder.js";
 globalThis.pdfjsViewer = {
   AnnotationLayerBuilder,
   DownloadManager,
+  ensureTextIndex,
   EventBus,
   FindState,
   GenericL10n,
@@ -52,7 +55,9 @@ globalThis.pdfjsViewer = {
   PDFLinkService,
   PDFPageView,
   PDFScriptingManager,
+  PDFSidecarStore,
   PDFSinglePageViewer,
+  PdfTextIndex,
   PDFViewer,
   ProgressBar,
   RenderingStates,
@@ -67,6 +72,7 @@ globalThis.pdfjsViewer = {
 export {
   AnnotationLayerBuilder,
   DownloadManager,
+  ensureTextIndex,
   EventBus,
   FindState,
   GenericL10n,
@@ -77,7 +83,9 @@ export {
   PDFLinkService,
   PDFPageView,
   PDFScriptingManager,
+  PDFSidecarStore,
   PDFSinglePageViewer,
+  PdfTextIndex,
   PDFViewer,
   ProgressBar,
   RenderingStates,

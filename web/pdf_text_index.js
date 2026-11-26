@@ -42,6 +42,10 @@ const END = 0,
   SPACE = 3,
   FIRST_CHAR = 4;
 
+// Above this many occurrences a search returns candidate pages instead of
+// locating every hit (single letters, very common pairs).
+const LOCATE_LIMIT = 20000;
+
 const IS_LETTER = /^\p{L}$/u;
 const IS_MARK = /^\p{M}$/u;
 // Same as PDFFindController's SPECIAL_CHARS_REG_EXP.
@@ -292,11 +296,8 @@ class TextIndexChunk {
     return this.bySymbol[mode].get(canon(ch, mode === 1)) ?? [];
   }
 
-  /**
-   * Occurrences of the tokens for pages of one mode: [pageIndex, offset,
-   * length] (offsets in the folded page).
-   */
-  _find(tokens, mode, pageFilter, out) {
+  /** Backward search: the row ranges [sp, ep, length] of the tokens. */
+  _ranges(tokens, mode) {
     const fm = this.fm;
     let states = [[0, fm.n, 0]];
     for (let t = tokens.length - 1; t >= 0 && states.length; t--) {
@@ -325,6 +326,14 @@ class TextIndexChunk {
       }
       states = next;
     }
+    return states;
+  }
+
+  /**
+   * Occurrences in row ranges, for pages of one mode: [pageIndex, offset,
+   * length] (offsets in the folded page).
+   */
+  _locate(states, pageFilter, out) {
     const { starts, firstPage } = this;
     for (const [sp, ep, len] of states) {
       for (let r = sp; r < ep; r++) {
@@ -347,8 +356,11 @@ class TextIndexChunk {
     }
   }
 
+  /**
+   * Backward search only; returns {occurrences, pages(): candidate pages,
+   * locate(): hits [pageIndex, offset, length]}.
+   */
   search(q) {
-    const hits = [];
     const { tokens, hasLetter } = q;
     const diacritics = this.diacritics;
     // The "u" folding is used on pages with diacritics when the query has
@@ -366,13 +378,29 @@ class TextIndexChunk {
         }
       }
     }
-    if (!differ) {
-      this._find(tokens, hasLetter ? 1 : 0, () => true, hits);
-    } else {
-      this._find(tokens, 0, p => !diacritics[p], hits);
-      this._find(tokens, 1, p => diacritics[p], hits);
+    const runs = differ
+      ? [
+          [this._ranges(tokens, 0), p => !diacritics[p]],
+          [this._ranges(tokens, 1), p => diacritics[p]],
+        ]
+      : [[this._ranges(tokens, hasLetter ? 1 : 0), () => true]];
+    let occurrences = 0;
+    for (const [states] of runs) {
+      for (const [sp, ep] of states) {
+        occurrences += ep - sp;
+      }
     }
-    return hits;
+    return {
+      occurrences,
+      pages: () => Array.from(this.pageLengths, (_, i) => this.firstPage + i),
+      locate: () => {
+        const hits = [];
+        for (const [states, filter] of runs) {
+          this._locate(states, filter, hits);
+        }
+        return hits;
+      },
+    };
   }
 }
 
@@ -476,10 +504,27 @@ class PdfTextIndex {
     if (q.tokens === undefined) {
       return { pages: [], exact: true, missing };
     }
+    const found = this.chunks.map(chunk => chunk.search(q));
+    const occurrences = found.reduce((a, f) => a + f.occurrences, 0);
+    if (occurrences > LOCATE_LIMIT) {
+      // Locating that many hits costs more than PDFFindController reading
+      // the pages: the chunks with hits are the candidates.
+      const pages = [];
+      for (const f of found) {
+        if (f.occurrences) {
+          for (const pageIndex of f.pages()) {
+            pages.push({ pageIndex, count: -1 });
+          }
+        }
+      }
+      return { pages, exact: false, missing };
+    }
     const hits = [];
-    for (const chunk of this.chunks) {
-      for (const h of chunk.search(q)) {
-        hits.push(h);
+    for (const f of found) {
+      if (f.occurrences) {
+        for (const h of f.locate()) {
+          hits.push(h);
+        }
       }
     }
     const pages = countPerPage(hits);
