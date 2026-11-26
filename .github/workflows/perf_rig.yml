@@ -18,6 +18,8 @@ on:
       - src/core/pdf_manager.js
       - web/pdf_find_controller.js
       - web/pdf_term_index.js
+      - web/pdf_page_view.js
+      - web/struct_tree_layer_builder.js
   workflow_dispatch:
 permissions:
   contents: read
