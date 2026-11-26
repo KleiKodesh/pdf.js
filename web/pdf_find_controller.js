@@ -415,6 +415,51 @@ function getOriginalIndex(diffs, pos, len) {
 /**
  * Provides search functionality to find a given string in a PDF document.
  */
+// How many items back a copy of the same text drawn at the same place is
+// looked for, and how close (as a fraction of the font size) it must be.
+const DRAWN_COPY_LOOKBACK = 16;
+const DRAWN_COPY_TOLERANCE = 0.15;
+
+/**
+ * Some PDFs draw the same text several times a fraction of a point apart (a
+ * "fake bold"): each copy is its own text item, so a search would find the
+ * word once per copy. Returns, per item, whether it repeats the text of one
+ * of the items just before it, in the same font size, at the same place
+ * (within DRAWN_COPY_TOLERANCE of the font size).
+ *
+ * The copies are NOT removed from the page string: the text layer still
+ * renders every item, and the match offsets must index its
+ * textContentItemsStr (see TextHighlighter._convertMatches). Instead a copy's
+ * text is replaced by as many "\0" characters, which keeps every offset and
+ * item length while nothing can match there.
+ */
+function findDrawnCopies(items) {
+  const copies = new Array(items.length).fill(false);
+  for (let i = 0, ii = items.length; i < ii; i++) {
+    const { str, transform } = items[i];
+    if (!str?.trim() || !transform) {
+      continue;
+    }
+    const size = Math.hypot(transform[0], transform[1]);
+    const tolerance = Math.max(0.5, size * DRAWN_COPY_TOLERANCE);
+    for (let j = i - 1; j >= 0 && j >= i - DRAWN_COPY_LOOKBACK; j--) {
+      const other = items[j];
+      if (
+        other.str === str &&
+        other.transform &&
+        Math.abs(Math.hypot(other.transform[0], other.transform[1]) - size) <=
+          tolerance &&
+        Math.abs(other.transform[4] - transform[4]) <= tolerance &&
+        Math.abs(other.transform[5] - transform[5]) <= tolerance
+      ) {
+        copies[i] = true;
+        break;
+      }
+    }
+  }
+  return copies;
+}
+
 class PDFFindController {
   #state = null;
 
@@ -999,9 +1044,14 @@ class PDFFindController {
           return;
         }
         const strBuf = [];
+        const { items } = textContent;
+        const copies = findDrawnCopies(items);
 
-        for (const textItem of textContent.items) {
-          strBuf.push(textItem.str);
+        for (let k = 0, kk = items.length; k < kk; k++) {
+          const textItem = items[k];
+          strBuf.push(
+            copies[k] ? "\0".repeat(textItem.str.length) : textItem.str
+          );
           if (textItem.hasEOL) {
             strBuf.push("\n");
           }
@@ -1438,4 +1488,10 @@ class PDFFindController {
   }
 }
 
-export { FindState, getOriginalIndex, normalize, PDFFindController };
+export {
+  findDrawnCopies,
+  FindState,
+  getOriginalIndex,
+  normalize,
+  PDFFindController,
+};

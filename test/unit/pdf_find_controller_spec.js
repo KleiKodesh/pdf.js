@@ -13,7 +13,11 @@
  * limitations under the License.
  */
 
-import { FindState, PDFFindController } from "../../web/pdf_find_controller.js";
+import {
+  findDrawnCopies,
+  FindState,
+  PDFFindController,
+} from "../../web/pdf_find_controller.js";
 import { buildGetDocumentParams } from "./test_utils.js";
 import { EventBus } from "../../web/event_utils.js";
 import { getDocument } from "../../src/display/api.js";
@@ -1381,6 +1385,64 @@ describe("pdf_find_controller", function () {
 
     pdfFindController.setDocument(null);
     await loadingTask.destroy();
+  });
+
+  it("finds text drawn several times at the same place only once", async () => {
+    // A "fake bold": the same line drawn 4 times a fraction of a point apart,
+    // then the word once more on another line.
+    const item = (str, x, y, size = 20) => ({
+      str,
+      transform: [size, 0, 0, size, x, y],
+      width: str.length * size * 0.5,
+      height: size,
+      hasEOL: false,
+    });
+    const items = [
+      item("shmuel ben", 100, 500),
+      item("shmuel ben", 100.1, 500.2),
+      item("shmuel ben", 100.2, 500),
+      item("shmuel ben", 100, 500.1),
+      item("and ", 100, 400),
+      item("shmuel again", 140, 400),
+      // Same text, far away: a real second occurrence, not a copy.
+      item("shmuel ben", 100, 300),
+    ];
+    const pdfDocument = {
+      numPages: 1,
+      getPage: async () => ({ getTextContent: async () => ({ items }) }),
+    };
+    const eventBus = new EventBus();
+    const linkService = new MockLinkService();
+    linkService.setDocument(pdfDocument);
+    const pdfFindController = new PDFFindController({
+      linkService,
+      eventBus,
+      delay: 0,
+    });
+    pdfFindController.setDocument(pdfDocument);
+
+    // Offsets still index every item's text (the text layer's
+    // textContentItemsStr): the copies keep their 3 * 10 characters.
+    await testSearch({
+      eventBus,
+      pdfFindController,
+      state: { query: "shmuel" },
+      matchesPerPage: [3],
+      selectedMatch: { pageIndex: 0, matchIndex: 0 },
+      pageMatches: [[0, 44, 56]],
+      pageMatchesLength: [[6, 6, 6]],
+    });
+
+    expect(findDrawnCopies(items)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+    pdfFindController.setDocument(null);
   });
 
   describe("custom matcher", () => {
