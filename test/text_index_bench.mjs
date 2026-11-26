@@ -130,7 +130,30 @@ const SYNTH_PAGES = [
 ].map(lines =>
   lines.map((str, i) => ({ str: u(str), hasEOL: i < lines.length - 1 }))
 );
+// A "fake bold" page: each word drawn twice at (almost) the same place.
+{
+  const at = (str, x, y, hasEOL = false) => ({
+    str,
+    hasEOL,
+    transform: [10, 0, 0, 10, x, y],
+  });
+  SYNTH_PAGES.push([
+    at("bold", 10, 700),
+    at("bold", 10.3, 700),
+    at(" word", 40, 700),
+    at(" word", 40.2, 700.1, true),
+    at("abc", 10, 680),
+    at("abc", 10, 680),
+    at("def", 40, 680),
+  ]);
+}
 const SYNTH_QUERIES = [
+  "bold",
+  "bold word",
+  "boldbold",
+  "abcdef",
+  "abcabc",
+  "word",
   "strasse",
   "Stra\\u00dfe",
   "stra\\u1e9ee",
@@ -227,7 +250,7 @@ for (let i = 0; !SYNTHETIC && i < numPages; i++) {
     enqueue(c) {
       for (const x of c.items) {
         if (x.str !== undefined) {
-          items.push({ str: x.str, hasEOL: x.hasEOL });
+          items.push({ str: x.str, hasEOL: x.hasEOL, transform: x.transform });
         }
       }
     },

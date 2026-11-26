@@ -32,8 +32,8 @@
  * FM-index. Only the chunks' BWTs are stored.
  */
 
+import { findDrawnCopies, normalize } from "./pdf_find_controller.js";
 import { FmIndex } from "./pdf_fm_index.js";
-import { normalize } from "./pdf_find_controller.js";
 
 const TEXT_INDEX_VERSION = 1;
 const END = 0,
@@ -444,9 +444,13 @@ class PdfTextIndex {
 
   /** The raw page string PDFFindController builds from getTextContent. */
   static pageString(textContent) {
+    // As PDFFindController: text drawn again at the same place is NULs.
+    const { items } = textContent;
+    const copies = findDrawnCopies(items);
     const strBuf = [];
-    for (const textItem of textContent.items) {
-      strBuf.push(textItem.str);
+    for (let k = 0, kk = items.length; k < kk; k++) {
+      const textItem = items[k];
+      strBuf.push(copies[k] ? "\0".repeat(textItem.str.length) : textItem.str);
       if (textItem.hasEOL) {
         strBuf.push("\n");
       }

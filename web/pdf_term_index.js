@@ -38,7 +38,7 @@
  */
 
 import { canon, foldPage, queryTokens } from "./pdf_text_index.js";
-import { normalize } from "./pdf_find_controller.js";
+import { findDrawnCopies, normalize } from "./pdf_find_controller.js";
 
 const TERM_INDEX_VERSION = 2;
 const IS_PUNCT = /^[\p{P}+^$|]$/u;
@@ -57,12 +57,14 @@ function pageTerms(folded) {
   const terms = new Set();
   let cur = "";
   for (const ch of folded) {
-    if (ch === null || ch === false || isPunct(ch)) {
+    // A drawn copy (NULs, see pageString) splits terms like a barrier: no
+    // query matches inside it, so leaving it out keeps a superset.
+    if (ch === null || ch === false || ch === "\0" || isPunct(ch)) {
       if (cur) {
         terms.add(cur);
         cur = "";
       }
-      if (ch) {
+      if (ch && ch !== "\0") {
         terms.add(ch);
       }
     } else {
@@ -259,9 +261,13 @@ class PdfTermIndex {
 
   /** The raw page string PDFFindController builds from getTextContent. */
   static pageString(textContent) {
+    // As PDFFindController: text drawn again at the same place is NULs.
+    const { items } = textContent;
+    const copies = findDrawnCopies(items);
     const strBuf = [];
-    for (const textItem of textContent.items) {
-      strBuf.push(textItem.str);
+    for (let k = 0, kk = items.length; k < kk; k++) {
+      const textItem = items[k];
+      strBuf.push(copies[k] ? "\0".repeat(textItem.str.length) : textItem.str);
       if (textItem.hasEOL) {
         strBuf.push("\n");
       }
